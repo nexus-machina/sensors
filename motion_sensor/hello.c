@@ -1,22 +1,123 @@
-#include <linux/init.h>
 #include <linux/module.h>
 #include <linux/i2c.h>
+#include <linux/delay.h>
 
-MODULE_LICENSE("Dual BSD/GPL");
+#define APDS9960_ADDR 0x39
+#define PROX_DATA_REG 0x9C
 
-static int hello_init(void)
+struct apds9960_data {
+    struct i2c_client *client;
+    struct mutex lock;
+};
+
+// Read proximity data
+static u8 apds9960_read_proximity(struct i2c_client *client)
 {
-  printk(KERN_ALERT "Hello, world\n");
-  return 0;
+    u8 data;
+    data = i2c_smbus_read_byte_data(client, PROX_DATA_REG);
+    return data;
 }
 
-static void hello_exit(void)
+// Sysfs attribute to read proximity
+static ssize_t proximity_show(struct device *dev,
+                            struct device_attribute *attr,
+                            char *buf)
 {
-  printk(KERN_ALERT "Goodbye, cruel world\n");
+    struct i2c_client *client = to_i2c_client(dev);
+    u8 prox_data = apds9960_read_proximity(client);
+    
+    return sprintf(buf, "%d\n", prox_data);
 }
 
-module_init(hello_init);
-module_exit(hello_exit);
+// Create the sysfs attribute
+static DEVICE_ATTR_RO(proximity);
+
+// Create attribute group
+static struct attribute *apds9960_attributes[] = {
+    &dev_attr_proximity.attr,
+    NULL
+};
+
+static const struct attribute_group apds9960_attr_group = {
+    .attrs = apds9960_attributes,
+};
+
+static int apds9960_probe(struct i2c_client *client)
+{
+    struct apds9960_data *data;
+    int ret;
+
+    if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA))
+        return -EIO;
+
+    data = devm_kzalloc(&client->dev, sizeof(*data), GFP_KERNEL);
+    if (!data)
+        return -ENOMEM;
+
+    data->client = client;
+    mutex_init(&data->lock);
+    i2c_set_clientdata(client, data);
+
+    // Register sysfs group instead of individual file
+    ret = sysfs_create_group(&client->dev.kobj, &apds9960_attr_group);
+    if (ret)
+        return ret;
+
+    dev_info(&client->dev, "APDS-9960 probe successful\n");
+    return 0;
+}
+
+static void apds9960_remove(struct i2c_client *client)
+{
+    sysfs_remove_group(&client->dev.kobj, &apds9960_attr_group);
+}
+
+static const struct i2c_device_id apds9960_id[] = {
+    { "apds9960", 0 },
+    { }
+};
+MODULE_DEVICE_TABLE(i2c, apds9960_id);
+
+#ifdef CONFIG_OF
+static const struct of_device_id apds9960_of_match[] = {
+    { .compatible = "avago,apds9960" },
+    { }
+};
+MODULE_DEVICE_TABLE(of, apds9960_of_match);
+#endif
+
+static struct i2c_driver apds9960_driver = {
+    .driver = {
+        .name = "apds9960",
+        .owner = THIS_MODULE,
+        .of_match_table = of_match_ptr(apds9960_of_match),
+    },
+    .probe = apds9960_probe,
+    .remove = apds9960_remove,
+    .id_table = apds9960_id,
+};
+
+module_i2c_driver(apds9960_driver);
+
+MODULE_AUTHOR("Your Name");
+MODULE_DESCRIPTION("APDS-9960 proximity sensor driver");
+MODULE_LICENSE("GPL");
+
+// 
+// 
+// static int hello_init(void)
+// {
+//   printk(KERN_ALERT "Hello, world\n");
+//   return 0;
+// }
+// 
+// static void hello_exit(void)
+// {
+//   printk(KERN_ALERT "Goodbye, cruel world\n");
+// }
+// 
+// module_init(hello_init);
+// module_exit(hello_exit);
 
 /*
  * Client Driver Game Plan
@@ -30,7 +131,7 @@ module_exit(hello_exit);
  * Probe for and attach the device
  *      This will require some interfacing with the underlying i2c chip driver,
  *      as well as sort of strategy for detecting the i2c device address and whatnot.
- *      Eventually you fill out i2c_baord_info struct and initiali
+ *      Eventually you fill out i2c_baord_info struct and initialize
  * Initialize the driver
  * Handling special states:
  *      low power
