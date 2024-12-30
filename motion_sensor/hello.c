@@ -48,15 +48,46 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
   buf[count-1] = '\0';
   /* Convert the string to an unsigned long */
   ret = kstrtoul(buf, 0, &val);
+
+  /* TODO: Check if the user wrote a 'm' or 'g' command, and convert that to the 
+   * motion readout or gesture engine readout respectively */
   i2c_smbus_write_byte(apds9960->client, val);
   return count;
 }
 
 /* User is reading data from /dev/apds9960XX */
 static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
- size_t count, loff_t *ppos)
+    size_t count, loff_t *ppos)
 {
-  printk(KERN_ALERT "WHAT THE FUCKING SIGMA!!!!");
+  /* TODO: Perform the read. Might need to do some internal state checking depending
+   * on of the device is uing the gesture engine or not */
+  int expval, size;
+  char buf[3];
+  struct apds9960_dev *apds9960;
+  apds9960 = container_of(file->private_data, struct apds9960_dev, apds9960_miscdevice);
+  /* Store IO expander input in expval variable */
+  expval = i2c_smbus_read_byte_data(apds9960->client, PROX_DATA_REG);
+  if (expval < 0)
+    return -EFAULT;
+  /*
+   * Convert expval int value into a char string.
+   * For example, 255 int (4 bytes) = FF (2 bytes) + '\0' (1 byte) string.
+   */
+  size = sprintf(buf, "%02x", expval); /* size is 2 */
+  /*
+   * Replace NULL by \n. It is not needed to have a char array
+   * ended with \0 character.
+   */
+  buf[size] = '\n';
+  /* Send size+1 to include the \n character */
+  if(*ppos == 0) {
+    if(copy_to_user(userbuf, buf, size+1)) {
+      pr_info("Failed to return led_value to user space\n");
+      return -EFAULT;
+    }
+    *ppos+=1;
+    return size+1;
+  }
   return 0;
 }
 
@@ -70,7 +101,6 @@ static int apds9960_probe (struct i2c_client * client)
 {
   static int counter = 0;
   struct apds9960_dev * apds9960;
-  printk(KERN_ALERT "PROBE!!!!");
   /* Allocate the private structure */
   apds9960 = devm_kzalloc(&client->dev, sizeof(struct apds9960_dev), GFP_KERNEL);
   /* Store pointer to the device-structure in bus device context */
@@ -87,6 +117,7 @@ static int apds9960_probe (struct i2c_client * client)
   apds9960->apds9960_miscdevice.minor = MISC_DYNAMIC_MINOR;
   apds9960->apds9960_miscdevice.fops = &apds9960_fops;
   /* Register the misc device */
+  printk(KERN_ALERT "APDS9960 succesfully probed.");
   return misc_register(&apds9960->apds9960_miscdevice);
   return 0;
 }
