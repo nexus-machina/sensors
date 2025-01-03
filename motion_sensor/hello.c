@@ -40,7 +40,7 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
 {
   int ret;
   unsigned long val;
-  char buf[4];
+  char buf[5];
   struct apds9960_dev * apds9960;
   apds9960 = container_of(file->private_data, struct apds9960_dev, apds9960_miscdevice);
   copy_from_user(buf, userbuf, count);
@@ -51,7 +51,7 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
 
   /* TODO: Check if the user wrote a 'm' or 'g' command, and convert that to the 
    * motion readout or gesture engine readout respectively */
-  i2c_smbus_write_byte(apds9960->client, val);
+  i2c_smbus_write_byte_data(apds9960->client, 0x80, val);
   return count;
 }
 
@@ -61,14 +61,23 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
 {
   /* TODO: Perform the read. Might need to do some internal state checking depending
    * on of the device is uing the gesture engine or not */
-  int expval, size;
+  int expval, size, valid, enable;
   char buf[3];
   struct apds9960_dev *apds9960;
   apds9960 = container_of(file->private_data, struct apds9960_dev, apds9960_miscdevice);
   /* Store IO expander input in expval variable */
-  expval = i2c_smbus_read_byte_data(apds9960->client, PROX_DATA_REG);
-  if (expval < 0)
+  enable = i2c_smbus_read_byte_data(apds9960->client, 0x80);
+  pr_info("Enable: %d\n", enable);
+  i2c_smbus_write_byte_data(apds9960->client, 0x80, 1 | 1 << 2);
+  valid = i2c_smbus_read_byte_data(apds9960->client, 0x93);
+  if(valid) {
+    expval = i2c_smbus_read_byte_data(apds9960->client, PROX_DATA_REG);
+    if (expval < 0)
+      return -EFAULT;
+  } else {
+    pr_info("Motion data not ready\n");
     return -EFAULT;
+  }
   /*
    * Convert expval int value into a char string.
    * For example, 255 int (4 bytes) = FF (2 bytes) + '\0' (1 byte) string.
