@@ -17,6 +17,15 @@
 #define PROX_DATA_REG 0x9C
 #define DEVICE_NAME "apds9960"
 
+#define APDS_ENABLE 0x80
+#define APDS_PDATA 0x90
+#define APDS_PILT 0x89
+#define APDS_PIHT 0x8B
+
+#define APDS_ON (1)
+#define APDS_PROX_ENABLE (1<<2)
+#define APDS_PROX_INT_ENABLE (1<<5)
+
 struct apds9960_dev {
   struct i2c_client* client;
   struct miscdevice apds9960_miscdevice;
@@ -51,7 +60,7 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
 
   /* TODO: Check if the user wrote a 'm' or 'g' command, and convert that to the 
    * motion readout or gesture engine readout respectively */
-  i2c_smbus_write_byte_data(apds9960->client, 0x80, val);
+  i2c_smbus_write_byte_data(apds9960->client, APDS_ENABLE, val);
   return count;
 }
 
@@ -65,11 +74,8 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   char buf[3];
   struct apds9960_dev *apds9960;
   apds9960 = container_of(file->private_data, struct apds9960_dev, apds9960_miscdevice);
-  /* Store IO expander input in expval variable */
-  enable = i2c_smbus_read_byte_data(apds9960->client, 0x80);
-  pr_info("Enable: %d\n", enable);
-  i2c_smbus_write_byte_data(apds9960->client, 0x80, 1 | 1 << 2);
-  valid = i2c_smbus_read_byte_data(apds9960->client, 0x93);
+  i2c_smbus_write_byte_data(apds9960->client, APDS_ENABLE, APDS_ON | APDS_PROX_ENABLE);
+  valid = i2c_smbus_read_byte_data(apds9960->client, APDS_PDATA);
   if(valid) {
     expval = i2c_smbus_read_byte_data(apds9960->client, PROX_DATA_REG);
     if (expval < 0)
@@ -91,7 +97,7 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   /* Send size+1 to include the \n character */
   if(*ppos == 0) {
     if(copy_to_user(userbuf, buf, size+1)) {
-      pr_info("Failed to return led_value to user space\n");
+      pr_info("Failed to return value to user space\n");
       return -EFAULT;
     }
     *ppos+=1;
