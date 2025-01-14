@@ -28,7 +28,15 @@
 /*
  * Color data is reported using two bytes, one
  * register for the low order bits, the next for
- * the high order bits
+ * the high order bits.
+ *
+ * Reading low order bits latches the high order bits
+ * until the next read, preventing data corruption. The
+ * same is done for the clear channel, which will latch
+ * all other channels. This means that any read to clear
+ * must also be a read of all channels, and any read to
+ * one channel must be a complete read. Otherwise, this
+ * will lock-up the sensor.
  */
 // clear data
 #define APDS_CDATAL 0x94 // low byte
@@ -95,8 +103,6 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
   /* Convert the string to an unsigned long */
   ret = kstrtoul(buf, 0, &val);
 
-  /* TODO: Check if the user wrote a 'm' or 'g' command, and convert that to the 
-   * motion readout or gesture engine readout respectively */
   i2c_smbus_write_byte_data(apds9960->client, APDS_ENABLE, val);
   return count;
 }
@@ -113,9 +119,13 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
 
   apds9960->color_ready = false;
   i2c_smbus_write_byte_data(apds9960->client, APDS_ENABLE, APDS_ON_ENABLE | APDS_PROX_ENABLE | APDS_ALS_ENABLE);
+
+  // Sets gain controls. Bit range 1:0 (leftshift 0) light gain 
+  // 3:2 (leftshift 2) is for proximity gain
+  // 7:6 (leftshift 6) is for led gain
+  i2c_smbus_write_byte_data(apds9960->client, APDS_CONTROL, 3 | 2 << 2 | 0 << 6);
+
   i2c_smbus_write_byte_data(apds9960->client, APDS_ADC_TIME, 0xff);
-  // Sets als gain control
-  i2c_smbus_write_byte_data(apds9960->client, APDS_CONTROL, 1);
   pvalid = i2c_smbus_read_byte_data(apds9960->client, APDS_STATUS) & (1<<1);
   if(pvalid) {
     pr_info("Reading prox data\n");
