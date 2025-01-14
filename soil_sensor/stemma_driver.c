@@ -26,44 +26,30 @@ static ssize_t stemma_read_file(struct file *file, char __user *userbuf,
 {
 	pr_info("stemma_fops reading function\n");
 
-	int stemval, size, ret;
-	u8 data[2];
+	u8 stemma_base_reg = 0x0F; /* stemma soil sensor base register */
+	int stemval, size;
+	/*u8 data[3];*/
 	char buf[16];
 	struct stemma_dev *stemma; 
 
 	stemma = container_of(file->private_data, struct stemma_dev, stemma_miscdevice);
 
-	/* write the register address */
-	ret = i2c_smbus_write_byte(stemma->client, STEMMA_FUNC_REG);
-	if (ret < 0 ){
-		pr_err("Failed to write register address\n");
-	}
-
-	/* Read the data from the sensor */
-	ret = i2c_master_recv(stemma->client, data, 2);
-	if (ret < 0){
-		pr_err("Failed to read sensor data\n");
-	}
-	
-	/* Store STEMMA input variable
-	stemval = i2c_smbus_read_byte(stemma->client);
+	/* Store STEMMA input variablei */
+	stemval = i2c_smbus_read_byte_data(stemma->client, stemma_base_reg);
 	if (stemval < 0)
-		return -EFAULT; */
+		return -EFAULT;
 	/*
 	 * Convert stemaval in value into a char string 
 	 * For example, 255 int (4 bytes) = FF (2 bytes) + '\0' (1 byte) string.
 	 */
 
-	/* size = sprintf(buf,"%02x", stemval);  size is 2 */
+	size = sprintf(buf,"%02x", stemval); /* size is 2*/
 
 	/*
 	 * Replace NULL by \n. It is not needed to have a char array
 	 * ended with \0 character.
 	 */
-	/*buf[size] = '\n';*/
-	stemval = (data[0] << 8 | data[1])*0.1;
-
-	sprintf(buf,"%02x",stemval);
+	buf[size] = '\n';
 
 	/* send size+1 to include the \n character */
 	if (*ppos == 0){
