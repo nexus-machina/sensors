@@ -1,0 +1,19 @@
+/dts-v1/;
+/plugin/;
+/ {
+  compatible = "brcm,bcm2711"; /* Compatible with Raspberry Pi 4's SoC*/
+  fragment@0 {
+    target = <&i2c1>; /* do something */
+    __overlay__ {
+      #address-cells = <1>;
+      #size-cells = <0>;
+      status = "okay";
+
+      apds: apds@39 {
+        compatible = "arrow,apds";
+        reg = <0x39>;
+        status = "okay";
+      };
+    };
+  };
+};
