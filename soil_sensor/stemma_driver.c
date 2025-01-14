@@ -3,6 +3,14 @@
  * [x] Basic driver to initialize stemma soil sensor
  * [] Implement fops read & write function & test driver
  */
+
+/*
+ * ********** BOARD INFORMATION ***********
+ * Chip Family:		SAMD20
+ * Chip Cariant: 	SAMD10D14AM
+ * Board Name:		SOIL
+ */
+
 #include <linux/module.h>
 #include <linux/miscdevice.h>
 #include <linux/i2c.h>
@@ -10,8 +18,11 @@
 #include <linux/of.h>
 #include <linux/uaccess.h>
 
-#define	STEMMA_BASE_REG 0x0F
-#define STEMMA_FUNC_REG 0x10
+#define	SOIL_BASE_REG 0x0F
+#define SOIL_FUNC_REG 0x10
+#define SOIL_TEMP_REG 0X01
+#define SOIL_HUMIDITY_REG 0X01
+#define SOIR_MOISTURE_REG 0X02
 
 /* private structre to store device-specific information */
 struct stemma_dev {
@@ -26,22 +37,33 @@ static ssize_t stemma_read_file(struct file *file, char __user *userbuf,
 {
 	pr_info("stemma_fops reading function\n");
 
-	u8 stemma_base_reg = 0x0F; /* stemma soil sensor base register */
-	int stemval, size;
+	u8 stemma_base_reg = 0x02; /* stemma soil sensor base register */
+	s32 stemval, size;
 	/*u8 data[3];*/
-	char buf[16];
+	char buf[4];
 	struct stemma_dev *stemma; 
+	uint16_t moisture, temperature; 
 
 	stemma = container_of(file->private_data, struct stemma_dev, stemma_miscdevice);
 
-	/* Store STEMMA input variablei */
-	stemval = i2c_smbus_read_byte_data(stemma->client, stemma_base_reg);
+	/* Store STEMMA input variable */
+	/*stemval = i2c_smbus_read_byte_data(stemma->client, STEMMA_TEMPERATURE_REG);*/
+
+	stemval = i2c_smbus_read_i2c_block_data(stemma->client, 0, sizeof(buf), buf);
 	if (stemval < 0)
 		return -EFAULT;
 	/*
 	 * Convert stemaval in value into a char string 
 	 * For example, 255 int (4 bytes) = FF (2 bytes) + '\0' (1 byte) string.
 	 */
+	
+	pr_info("Raw data: %02x %02x %02x %02x\n", buf[0], buf[1], buf[2], buf[3]);
+	
+	moisture = (buf[0] << 4) | buf[1]; 
+	temperature = (buf[2] << 4) | buf[3];
+	
+	pr_info("moisture %d\n", moisture);
+	pr_info("temperature %d\n", temperature);
 
 	size = sprintf(buf,"%02x", stemval); /* size is 2*/
 
