@@ -18,6 +18,8 @@ int main()
 		printf("%x\n", buf);
 	}
 
+	/* implement new features */
+
 	/* write to the device */
 	/*ssize_t bytes_written = write(stemma_dev, data, strlen(data));*/
 
