@@ -18,11 +18,14 @@
 #include <linux/of.h>
 #include <linux/uaccess.h>
 
-#define	SOIL_BASE_REG 0x0F
-#define SOIL_FUNC_REG 0x10
-#define SOIL_TEMP_REG 0X01
+#define	STEMMA_TOUCH_REG 0x0F /* Moisture data */
+#define STEMMA_TEMP_REG 0x10 /* Temperature data (2 bytes) */
+#define STEMMA_MEASURE_CMD 0X0C /* Trigger measurement */
+
+/*#define SOIL_TEMP_REG 0X01
 #define SOIL_HUMIDITY_REG 0X01
-#define SOIR_MOISTURE_REG 0X02
+#define SOIl_MOISTURE_REG 0X02
+#define SOIL_I2C_ADDR 0x36 */
 
 /* private structre to store device-specific information */
 struct stemma_dev {
@@ -38,34 +41,32 @@ static ssize_t stemma_read_file(struct file *file, char __user *userbuf,
 	pr_info("stemma_fops reading function\n");
 
 	u8 stemma_base_reg = 0x02; /* stemma soil sensor base register */
-	s32 stemval, size;
-	/*u8 data[3];*/
-	char buf[4];
+	int size;
+	uint16_t moisture, temperature;
+	char buf[32];
 	struct stemma_dev *stemma; 
-	uint16_t moisture, temperature; 
 
 	stemma = container_of(file->private_data, struct stemma_dev, stemma_miscdevice);
 
-	/* Store STEMMA input variable */
-	/*stemval = i2c_smbus_read_byte_data(stemma->client, STEMMA_TEMPERATURE_REG);*/
+	/* Write to the measurement trigger register */
 
-	stemval = i2c_smbus_read_i2c_block_data(stemma->client, 0, sizeof(buf), buf);
-	if (stemval < 0)
+	/* Read moisture data */
+	moisture  = i2c_smbus_read_byte_data(stemma->client, STEMMA_TOUCH_REG);
+	if (moisture  < 0){
+		pr_info("Failed to read moisture data\n");
 		return -EFAULT;
-	/*
-	 * Convert stemaval in value into a char string 
-	 * For example, 255 int (4 bytes) = FF (2 bytes) + '\0' (1 byte) string.
-	 */
-	
-	pr_info("Raw data: %02x %02x %02x %02x\n", buf[0], buf[1], buf[2], buf[3]);
-	
-	moisture = (buf[0] << 4) | buf[1]; 
-	temperature = (buf[2] << 4) | buf[3];
-	
-	pr_info("moisture %d\n", moisture);
-	pr_info("temperature %d\n", temperature);
+	}
 
-	size = sprintf(buf,"%02x", stemval); /* size is 2*/
+	/* Read temperature data */
+	temperature = i2c_smbus_read_byte_data(stemma->client, STEMMA_TEMP_REG);
+	if ( temperature < 0){
+		pr_info("Failed tor ead temperature data\n");
+		return -EFAULT;
+	}
+	temperature = ((temperature * 200) / 65536) - 50;
+	
+
+	size = sprintf(buf,"Moisture: %02x, Temperature: %02x", moisture, temperature);
 
 	/*
 	 * Replace NULL by \n. It is not needed to have a char array

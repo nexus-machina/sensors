@@ -15,7 +15,7 @@ int main()
 
 	while(1){
 		read(stemma_dev, buf, 4);
-		printf("%x\n", buf);
+		printf(":\n", buf);
 	}
 
 	/* implement new features */
