@@ -107,67 +107,98 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
   return count;
 }
 
-/* User is reading data from /dev/apds9960XX */
-static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
-    size_t count, loff_t *ppos)
+// Sets gain controls. Bit range 1:0 (leftshift 0) light gain 
+// 3:2 (leftshift 2) is for proximity gain
+// 7:6 (leftshift 6) is for led gain
+static void apds9960_set_config(struct apds9960_dev* apds9960, int value)
 {
-  int expval, size, pvalid, avalid, enable, ret;
-  unsigned char clear_low, clear_high, red_low, red_high, green_low, green_high, blue_low, blue_high;
-  char buf[60]; // Increase buffer size for RGB values
-  struct apds9960_dev * apds9960;
-  apds9960 = container_of(file->private_data, struct apds9960_dev, apds9960_miscdevice);
+  i2c_smbus_write_byte_data(apds9960->client, APDS_CONTROL, value);
+}
 
-  apds9960->color_ready = false;
-  i2c_smbus_write_byte_data(apds9960->client, APDS_ENABLE, APDS_ON_ENABLE | APDS_PROX_ENABLE | APDS_ALS_ENABLE);
+static void apds9960_set_enable(struct apds9960_dev* apds9960, int value)
+{
+  i2c_smbus_write_byte_data(apds9960->client, APDS_ENABLE, value);
+}
 
-  // Sets gain controls. Bit range 1:0 (leftshift 0) light gain 
-  // 3:2 (leftshift 2) is for proximity gain
-  // 7:6 (leftshift 6) is for led gain
-  i2c_smbus_write_byte_data(apds9960->client, APDS_CONTROL, 3 | 2 << 2 | 0 << 6);
+static void apds9960_set_adc_time(struct apds9960_dev* apds9960, int value)
+{
+  i2c_smbus_write_byte_data(apds9960->client, APDS_ADC_TIME, value);
+}
 
-  i2c_smbus_write_byte_data(apds9960->client, APDS_ADC_TIME, 0xff);
+// Returns 0 on success, and sets the outparams to the color values
+static int apds9960_read_colors_crgb(struct apds9960_dev* apds9960, u16*C, u16* R, u16* G, u16* B)
+{
+  int avalid;
+  avalid = i2c_smbus_read_byte_data(apds9960->client, APDS_STATUS) & 1;
+  if(avalid) {
+    pr_info("Reading color data\n");
+    // Read RGB values
+    *C = i2c_smbus_read_byte_data(apds9960->client, APDS_CDATAL);
+    *C |= i2c_smbus_read_byte_data(apds9960->client, APDS_CDATAH) << 8;
+    *R = i2c_smbus_read_byte_data(apds9960->client, APDS_RDATAL);
+    *R |= i2c_smbus_read_byte_data(apds9960->client, APDS_RDATAH) << 8;
+    *G = i2c_smbus_read_byte_data(apds9960->client, APDS_GDATAL);
+    *G |= i2c_smbus_read_byte_data(apds9960->client, APDS_GDATAH) << 8;
+    *B = i2c_smbus_read_byte_data(apds9960->client, APDS_BDATAL);
+    *B |= i2c_smbus_read_byte_data(apds9960->client, APDS_BDATAH) << 8;
+  } else {
+    pr_info("Color not valid, skipping!!!!");
+    return avalid;
+  }
+  return 0;
+}
+
+int apds9960_read_proximity(struct apds9960_dev* apds9960)
+{
+  int pvalid, expval;
   pvalid = i2c_smbus_read_byte_data(apds9960->client, APDS_STATUS) & (1<<1);
   if(pvalid) {
     pr_info("Reading prox data\n");
     expval = i2c_smbus_read_byte_data(apds9960->client, PROX_DATA_REG);
     if (expval < 0) {
-        return -EFAULT;
+        return -1;
     }
   } else {
+    return -1;
+  }
+  return expval;
+}
+
+/* User is reading data from /dev/apds9960XX */
+static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
+    size_t count, loff_t *ppos)
+{
+  int proximity, size, ret, avalid;
+  u16 C, R, G, B;
+  char buf[60]; // Increase buffer size for RGB values
+  struct apds9960_dev * apds9960;
+  apds9960 = container_of(file->private_data, struct apds9960_dev, apds9960_miscdevice);
+
+  apds9960_set_enable(apds9960, APDS_ON_ENABLE | APDS_PROX_ENABLE | APDS_ALS_ENABLE);
+  apds9960_set_adc_time(apds9960, 0xff);
+  apds9960_set_config(apds9960, 3 | 2 << 2 | 0 << 6);
+  proximity = apds9960_read_proximity(apds9960);
+  if(proximity < 0) {
     pr_info("Prox not valid, skipping!!!!");
   }
 
+  apds9960->color_ready = false;
   mod_timer(&apds9960->timer, msecs_to_jiffies(30));
   ret = wait_event_interruptible(apds9960->wq, apds9960->color_ready);
   if(ret)
     return ret;
 
-  avalid = i2c_smbus_read_byte_data(apds9960->client, APDS_STATUS) & 1;
-  if(avalid) {
-    pr_info("Reading color data\n");
-    // Read RGB values
-    clear_low = i2c_smbus_read_byte_data(apds9960->client, APDS_CDATAL);
-    clear_high = i2c_smbus_read_byte_data(apds9960->client, APDS_CDATAH);
-    red_low = i2c_smbus_read_byte_data(apds9960->client, APDS_RDATAL);
-    red_high = i2c_smbus_read_byte_data(apds9960->client, APDS_RDATAH);
-    green_low = i2c_smbus_read_byte_data(apds9960->client, APDS_GDATAL);
-    green_high = i2c_smbus_read_byte_data(apds9960->client, APDS_GDATAH);
-    blue_low = i2c_smbus_read_byte_data(apds9960->client, APDS_BDATAL);
-    blue_high = i2c_smbus_read_byte_data(apds9960->client, APDS_BDATAH);
-  } else {
-    pr_info("Color not valid, skipping!!!!");
-  }
+  avalid = apds9960_read_colors_crgb(apds9960, &C, &R, &G, &B);
 
   // Test if both failed
-  if(!avalid && !pvalid) {
+  if(!avalid && (proximity < 0)) {
       pr_info("Data not ready!\n");
       return -EFAULT;
   }
 
   // Prepare the output buffer
-  if(avalid)
-    size = sprintf(buf, "ExpVal: %02x, CRGB: C(%02x%02x) R(%02x%02x) G(%02x%02x) B(%02x%02x)",
-                 expval, clear_high, clear_low, red_high, red_low, green_high, green_low, blue_high, blue_low);
+  size = sprintf(buf, "Prox: %02x, CRGB: C(%04x) R(%04x) G(%04x) B(%04x)",
+                 proximity, C, R, G, B);
   /*
    * Replace NULL by \n. It is not needed to have a char array
    * ended with \0 character.
