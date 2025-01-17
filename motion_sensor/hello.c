@@ -5,6 +5,10 @@
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 #include <linux/cdev.h>
+#include <linux/platform_device.h>
+#include <linux/interrupt.h>
+#include <linux/gpio/consumer.h>
+#include <linux/miscdevice.h>
 
 #include <linux/wait.h>
 #include <linux/timer.h>
@@ -24,6 +28,11 @@
 #define APDS_WAIT_TIME 0x83
 #define APDS_ADC_TIME 0x82
 #define APDS_CONTROL 0x8f
+#define APDS_PERS 0x8c
+#define APDS_CONFIG_THREE 0x9f
+
+// TODO Have this be configurable
+#define APDS_INT_PIN 23
 
 /*
  * Color data is reported using two bytes, one
@@ -63,6 +72,8 @@
 struct apds9960_dev {
   struct i2c_client* client;
   struct miscdevice apds9960_miscdevice;
+  struct gpio_desc *gpio;
+  int irq;
   wait_queue_head_t wq;
   bool color_ready;
   struct timer_list timer;
@@ -125,6 +136,16 @@ static void apds9960_set_adc_time(struct apds9960_dev* apds9960, int value)
   i2c_smbus_write_byte_data(apds9960->client, APDS_ADC_TIME, value);
 }
 
+static void apds9960_set_prox_pers(struct apds9960_dev* apds9960, u8 value)
+{
+  i2c_smbus_write_byte_data(apds9960->client, APDS_PERS, value << 4);
+}
+
+static void apds9960_set_sleep_after_interrupt(struct apds9960_dev* apds9960, u8 value)
+{
+  i2c_smbus_write_byte_data(apds9960->client, APDS_CONFIG_THREE, (value & 1) << 4);
+}
+
 // Returns 0 on success, and sets the outparams to the color values
 static int apds9960_read_colors_crgb(struct apds9960_dev* apds9960, u16*C, u16* R, u16* G, u16* B)
 {
@@ -174,9 +195,11 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   struct apds9960_dev * apds9960;
   apds9960 = container_of(file->private_data, struct apds9960_dev, apds9960_miscdevice);
 
-  apds9960_set_enable(apds9960, APDS_ON_ENABLE | APDS_PROX_ENABLE | APDS_ALS_ENABLE);
   apds9960_set_adc_time(apds9960, 0xff);
   apds9960_set_config(apds9960, 3 | 2 << 2 | 0 << 6);
+
+  apds9960_set_enable(apds9960, APDS_ON_ENABLE | APDS_PROX_ENABLE | APDS_ALS_ENABLE);
+  apds9960_set_sleep_after_interrupt(apds9960, 0);
   proximity = apds9960_read_proximity(apds9960);
   if(proximity < 0) {
     pr_info("Prox not valid, skipping!!!!");
@@ -195,6 +218,12 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
       pr_info("Data not ready!\n");
       return -EFAULT;
   }
+
+  apds9960_set_enable(apds9960, APDS_ON_ENABLE | APDS_PROX_ENABLE | APDS_PROX_INT_ENABLE);
+  // Setup interrupt thresholds just for testing purposes
+  apds9960_set_prox_pers(apds9960, 1);
+  i2c_smbus_write_byte_data(apds9960->client, APDS_PILT, 0x10);
+  i2c_smbus_write_byte_data(apds9960->client, APDS_PIHT, 0xa0);
 
   // Prepare the output buffer
   size = sprintf(buf, "Prox: %02x, CRGB: C(%04x) R(%04x) G(%04x) B(%04x)",
@@ -222,21 +251,61 @@ static const struct file_operations apds9960_fops = {
   .write = apds9960_write_file,
 };
 
+static irqreturn_t apds9960_isr(int irq, void *data)
+{
+  struct apds9960_dev *apds9960 = data;
+  dev_info(&apds9960->client->dev, "interrupt received. key: %s\n", DEVICE_NAME);
+  return IRQ_HANDLED;
+}
+
 static int apds9960_probe (struct i2c_client * client)
 {
   static int counter = 0;
+  struct platform_device *pdev;
   struct apds9960_dev * apds9960;
+  int err;
+  if (!client->dev.of_node) {
+      dev_err(&client->dev, "No device tree node found\n");
+      return -ENODEV;
+  }
+  dev_info(&client->dev, "Device tree node: %pOF\n", client->dev.of_node);
+
   /* Allocate the private structure */
   apds9960 = devm_kzalloc(&client->dev, sizeof(struct apds9960_dev), GFP_KERNEL);
+  pdev = to_platform_device(&client->dev);
   /* Store pointer to the device-structure in bus device context */
   i2c_set_clientdata(client,apds9960);
   /* Store pointer to I2C client */
   apds9960->client = client;
 
-
   /* Wait mechanism */
   init_waitqueue_head(&apds9960->wq);
   timer_setup(&apds9960->timer, sensor_timer_cb, 0);
+
+  /* Get GPIO descriptor and IRQ from device tree */
+  // Use gpio driver to setup pin
+  apds9960->gpio = gpiod_get(&client->dev, "apdsint", GPIOD_IN);
+  if (IS_ERR(apds9960->gpio)) {
+    if(PTR_ERR(apds9960->gpio) == -ENOENT) {
+      dev_err(&client->dev, "GPIO get failed, ENOENT\n");
+    }
+    dev_err(&client->dev, "GPIO get failed: %ld\n", PTR_ERR(apds9960->gpio));
+    return PTR_ERR(apds9960->gpio);
+  }
+
+  apds9960->irq = gpiod_to_irq(apds9960->gpio);
+  if (apds9960->irq < 0) {
+    dev_err(&client->dev, "Failed to get IRQ: %d\n", apds9960->irq);
+    return apds9960->irq;
+  }
+
+  dev_info(&client->dev, "Using IRQ: %d\n", apds9960->irq);
+
+  err = devm_request_irq(&client->dev, apds9960->irq, apds9960_isr, IRQF_TRIGGER_FALLING, DEVICE_NAME, apds9960);
+  if(err) {
+    dev_info(&client->dev, "ERM, what the sigma!?: %d\n", err);
+    return -ENOENT;
+  }
 
   /*
    * Initialize the misc device, apds9960 is incremented
@@ -261,6 +330,9 @@ void apds9960_remove(struct i2c_client * client)
       "apds9960_remove is entered on %s\n", apds9960->name);
   /* Deregister misc device */
   misc_deregister(&apds9960->apds9960_miscdevice);
+  devm_free_irq(&client->dev, apds9960->irq, apds9960);
+  gpiod_put(apds9960->gpio);
+  del_timer(&apds9960->timer);
   dev_info(&client->dev,
       "apds9960_remove is exited on %s\n", apds9960->name);
 }
@@ -276,7 +348,6 @@ static struct i2c_driver apds9960_driver = {
   .remove = apds9960_remove,
   .id_table = i2c_ids,
 };
-
 
 module_i2c_driver(apds9960_driver);
 
