@@ -10,27 +10,26 @@
 #include <linux/gpio/consumer.h>
 #include <linux/miscdevice.h>
 #include <linux/input.h>
-
 #include <linux/wait.h>
 #include <linux/timer.h>
 #include <linux/jiffies.h>
 
-#define APDS_MAJOR 42
-#define APDS_MAX_MINORS 1
+#define APDS9960_MAJOR 42
+#define APDS9960_MAX_MINORS 1
 #define APDS9960_ADDR 0x39
 #define PROX_DATA_REG 0x9C
 #define DEVICE_NAME "apds9960"
 
-#define APDS_ENABLE 0x80
-#define APDS_PDATA 0x90 // prox data
-#define APDS_PILT 0x89
-#define APDS_PIHT 0x8B
-#define APDS_STATUS 0x92
-#define APDS_WAIT_TIME 0x83
-#define APDS_ADC_TIME 0x82
-#define APDS_CONTROL 0x8f
-#define APDS_PERS 0x8c
-#define APDS_CONFIG_THREE 0x9f
+#define APDS9960_ENABLE 0x80
+#define APDS9960_PDATA 0x90 // prox data
+#define APDS9960_PILT 0x89
+#define APDS9960_PIHT 0x8B
+#define APDS9960_STATUS 0x92
+#define APDS9960_WAIT_TIME 0x83
+#define APDS9960_ADC_TIME 0x82
+#define APDS9960_CONTROL 0x8f
+#define APDS9960_PERS 0x8c
+#define APDS9960_CONFIG_THREE 0x9f
 
 #define APDS9960_GCONF4_REG 0xAB
 #define APDS9960_GSTATUS_REG 0xAF
@@ -39,7 +38,7 @@
 #define APDS9960_STATUS_GINT (1<<2)
 
 // TODO Have this be configurable
-#define APDS_INT_PIN 23
+#define APDS9960_INT_PIN 23
 
 /*
  * Color data is reported using two bytes, one
@@ -55,26 +54,26 @@
  * will lock-up the sensor.
  */
 // clear data
-#define APDS_CDATAL 0x94 // low byte
-#define APDS_CDATAH 0x95 // high byte
+#define APDS9960_CDATAL 0x94 // low byte
+#define APDS9960_CDATAH 0x95 // high byte
 // read data
-#define APDS_RDATAL 0x96
-#define APDS_RDATAH 0x97
+#define APDS9960_RDATAL 0x96
+#define APDS9960_RDATAH 0x97
 // green data
-#define APDS_GDATAL 0x98
-#define APDS_GDATAH 0x99
+#define APDS9960_GDATAL 0x98
+#define APDS9960_GDATAH 0x99
 // blue data
-#define APDS_BDATAL 0x9A
-#define APDS_BDATAH 0x9B
+#define APDS9960_BDATAL 0x9A
+#define APDS9960_BDATAH 0x9B
 
 // Enable bitfields 
-#define APDS_ON_ENABLE (1)
-#define APDS_ALS_ENABLE (1<<1)
-#define APDS_PROX_ENABLE (1<<2)
-#define APDS_WAIT_ENABLE (1<<3)
-#define APDS_ALS_INT_ENABLE (1<<4)
-#define APDS_PROX_INT_ENABLE (1<<5)
-#define APDS_GESTURE_ENABLE (1<<6)
+#define APDS9960_ON_ENABLE (1)
+#define APDS9960_ALS_ENABLE (1<<1)
+#define APDS9960_PROX_ENABLE (1<<2)
+#define APDS9960_WAIT_ENABLE (1<<3)
+#define APDS9960_ALS_INT_ENABLE (1<<4)
+#define APDS9960_PROX_INT_ENABLE (1<<5)
+#define APDS9960_GESTURE_ENABLE (1<<6)
 
 struct apds9960_dev {
   struct i2c_client* client;
@@ -122,7 +121,7 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
   /* Convert the string to an unsigned long */
   ret = kstrtoul(buf, 0, &val);
 
-  i2c_smbus_write_byte_data(apds9960->client, APDS_ENABLE, val);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_ENABLE, val);
   return count;
 }
 
@@ -131,45 +130,45 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
 // 7:6 (leftshift 6) is for led gain
 static void apds9960_set_config(struct apds9960_dev* apds9960, int value)
 {
-  i2c_smbus_write_byte_data(apds9960->client, APDS_CONTROL, value);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_CONTROL, value);
 }
 
 static void apds9960_set_enable(struct apds9960_dev* apds9960, int value)
 {
-  i2c_smbus_write_byte_data(apds9960->client, APDS_ENABLE, value);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_ENABLE, value);
 }
 
 static void apds9960_set_adc_time(struct apds9960_dev* apds9960, int value)
 {
-  i2c_smbus_write_byte_data(apds9960->client, APDS_ADC_TIME, value);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_ADC_TIME, value);
 }
 
 static void apds9960_set_prox_pers(struct apds9960_dev* apds9960, u8 value)
 {
-  i2c_smbus_write_byte_data(apds9960->client, APDS_PERS, value << 4);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_PERS, value << 4);
 }
 
 static void apds9960_set_sleep_after_interrupt(struct apds9960_dev* apds9960, u8 value)
 {
-  i2c_smbus_write_byte_data(apds9960->client, APDS_CONFIG_THREE, (value & 1) << 4);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_CONFIG_THREE, (value & 1) << 4);
 }
 
 // Returns 0 on success, and sets the outparams to the color values
 static int apds9960_read_colors_crgb(struct apds9960_dev* apds9960, u16*C, u16* R, u16* G, u16* B)
 {
   int avalid;
-  avalid = i2c_smbus_read_byte_data(apds9960->client, APDS_STATUS) & 1;
+  avalid = i2c_smbus_read_byte_data(apds9960->client, APDS9960_STATUS) & 1;
   if(avalid) {
     pr_info("Reading color data\n");
     // Read RGB values
-    *C = i2c_smbus_read_byte_data(apds9960->client, APDS_CDATAL);
-    *C |= i2c_smbus_read_byte_data(apds9960->client, APDS_CDATAH) << 8;
-    *R = i2c_smbus_read_byte_data(apds9960->client, APDS_RDATAL);
-    *R |= i2c_smbus_read_byte_data(apds9960->client, APDS_RDATAH) << 8;
-    *G = i2c_smbus_read_byte_data(apds9960->client, APDS_GDATAL);
-    *G |= i2c_smbus_read_byte_data(apds9960->client, APDS_GDATAH) << 8;
-    *B = i2c_smbus_read_byte_data(apds9960->client, APDS_BDATAL);
-    *B |= i2c_smbus_read_byte_data(apds9960->client, APDS_BDATAH) << 8;
+    *C = i2c_smbus_read_byte_data(apds9960->client, APDS9960_CDATAL);
+    *C |= i2c_smbus_read_byte_data(apds9960->client, APDS9960_CDATAH) << 8;
+    *R = i2c_smbus_read_byte_data(apds9960->client, APDS9960_RDATAL);
+    *R |= i2c_smbus_read_byte_data(apds9960->client, APDS9960_RDATAH) << 8;
+    *G = i2c_smbus_read_byte_data(apds9960->client, APDS9960_GDATAL);
+    *G |= i2c_smbus_read_byte_data(apds9960->client, APDS9960_GDATAH) << 8;
+    *B = i2c_smbus_read_byte_data(apds9960->client, APDS9960_BDATAL);
+    *B |= i2c_smbus_read_byte_data(apds9960->client, APDS9960_BDATAH) << 8;
   } else {
     pr_info("Color not valid, skipping!!!!");
     return avalid;
@@ -180,7 +179,7 @@ static int apds9960_read_colors_crgb(struct apds9960_dev* apds9960, u16*C, u16* 
 int apds9960_read_proximity(struct apds9960_dev* apds9960)
 {
   int pvalid, expval;
-  pvalid = i2c_smbus_read_byte_data(apds9960->client, APDS_STATUS) & (1<<1);
+  pvalid = i2c_smbus_read_byte_data(apds9960->client, APDS9960_STATUS) & (1<<1);
   if(pvalid) {
     pr_info("Reading prox data\n");
     expval = i2c_smbus_read_byte_data(apds9960->client, PROX_DATA_REG);
@@ -202,24 +201,27 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   char buf[60]; // Increase buffer size for RGB values
   struct apds9960_dev * apds9960;
   apds9960 = container_of(file->private_data, struct apds9960_dev, apds9960_miscdevice);
+  dev_info(&apds9960->client->dev, "Enter Read");
 
   apds9960_set_adc_time(apds9960, 0xff);
   apds9960_set_config(apds9960, 3 | 2 << 2 | 0 << 6);
 
-  apds9960_set_enable(apds9960, APDS_ON_ENABLE | APDS_PROX_ENABLE | APDS_ALS_ENABLE);
+  apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_PROX_ENABLE | APDS9960_ALS_ENABLE);
   apds9960_set_sleep_after_interrupt(apds9960, 0);
   proximity = apds9960_read_proximity(apds9960);
   if(proximity < 0) {
     pr_info("Prox not valid, skipping!!!!");
   }
+  dev_info(&apds9960->client->dev, "Prox read");
 
-  apds9960->color_ready = false;
-  mod_timer(&apds9960->timer, msecs_to_jiffies(30));
-  ret = wait_event_interruptible(apds9960->wq, apds9960->color_ready);
-  if(ret)
-    return ret;
+  // apds9960->color_ready = false;
+  // mod_timer(&apds9960->timer, msecs_to_jiffies(30));
+  // ret = wait_event_interruptible(apds9960->wq, apds9960->color_ready);
+  // if(ret)
+  //   return ret;
 
   avalid = apds9960_read_colors_crgb(apds9960, &C, &R, &G, &B);
+  dev_info(&apds9960->client->dev, "Color read");
 
   // Test if both failed
   if(!avalid && (proximity < 0)) {
@@ -227,11 +229,11 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
       return -EFAULT;
   }
 
-  apds9960_set_enable(apds9960, APDS_ON_ENABLE | APDS_PROX_ENABLE | APDS_PROX_INT_ENABLE);
+  apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_PROX_ENABLE | APDS9960_PROX_INT_ENABLE);
   // Setup interrupt thresholds just for testing purposes
   apds9960_set_prox_pers(apds9960, 1);
-  i2c_smbus_write_byte_data(apds9960->client, APDS_PILT, 0x10);
-  i2c_smbus_write_byte_data(apds9960->client, APDS_PIHT, 0xa0);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_PILT, 0x10);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_PIHT, 0xa0);
 
   // Prepare the output buffer
   size = sprintf(buf, "Prox: %02x, CRGB: C(%04x) R(%04x) G(%04x) B(%04x)",
@@ -264,13 +266,11 @@ static irqreturn_t apds9960_isr(int irq, void *data)
   struct i2c_client *client;
   struct apds9960_dev *apds9960 = data;
   client = apds9960->client;
-  u8 status = i2c_smbus_read_byte_data(client, APDS_STATUS);
+  u8 status = i2c_smbus_read_byte_data(client, APDS9960_STATUS);
 
   if (status & APDS9960_STATUS_GINT) { // Gesture interrupt
                                        // Read gesture apds9960 from FIFO (simplified example)
-    u8 fifo_level = i2c_smbus_read_byte_data(client, APDS9960_GSTATUS_REG) & 0x1F;
-
-    for (int i = 0; i < fifo_level; i++) {
+    for (int i = 0; i < 4; i++) {
       u8 gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
 
       // Decode gesture direction (example logic - see datasheet)
@@ -336,8 +336,8 @@ static int apds9960_probe (struct i2c_client * client)
   }
 
   // Power on and enable gesture mode (see datasheet registers)
-  i2c_smbus_write_byte_data(client, APDS_ENABLE, 
-                           APDS_ON_ENABLE | APDS_GESTURE_ENABLE );
+  i2c_smbus_write_byte_data(client, APDS9960_ENABLE, 
+                           APDS9960_ON_ENABLE | APDS9960_GESTURE_ENABLE );
 
   // Set gesture thresholds (adjust based on testing)
   // GESTURE_RIGHT_OFFSET_REGISTER, w/ gpulse on bits 5:0
@@ -382,11 +382,8 @@ static int apds9960_probe (struct i2c_client * client)
   apds9960->apds9960_miscdevice.minor = MISC_DYNAMIC_MINOR;
   apds9960->apds9960_miscdevice.fops = &apds9960_fops;
 
-  // Prime device so that it's ready to read (takes 7ms)
-  apds9960_set_enable(apds9960, APDS_ON_ENABLE | APDS_PROX_ENABLE );
-
   /* Register the misc device */
-  printk(KERN_ALERT "APDS9960 succesfully probed.");
+  dev_info(&client->dev, "apds9960 probe successful");
   return misc_register(&apds9960->apds9960_miscdevice);
   return 0;
 }
