@@ -14,7 +14,7 @@
         reg = <0x39>;
 
         interrupt-parent = <&gpio>;
-        interrupts = <23 2>;
+        interrupts = <23 8>;
         apdsint-gpios = <&gpio 23 1>;
 
         status = "okay";

@@ -9,6 +9,7 @@
 #include <linux/interrupt.h>
 #include <linux/gpio/consumer.h>
 #include <linux/miscdevice.h>
+#include <linux/input.h>
 
 #include <linux/wait.h>
 #include <linux/timer.h>
@@ -30,6 +31,12 @@
 #define APDS_CONTROL 0x8f
 #define APDS_PERS 0x8c
 #define APDS_CONFIG_THREE 0x9f
+
+#define APDS9960_GCONF4_REG 0xAB
+#define APDS9960_GSTATUS_REG 0xAF
+#define APDS9960_GFIFO_U_REG 0xFC
+
+#define APDS9960_STATUS_GINT (1<<2)
 
 // TODO Have this be configurable
 #define APDS_INT_PIN 23
@@ -72,6 +79,7 @@
 struct apds9960_dev {
   struct i2c_client* client;
   struct miscdevice apds9960_miscdevice;
+  struct input_dev *input;
   struct gpio_desc *gpio;
   int irq;
   wait_queue_head_t wq;
@@ -253,8 +261,30 @@ static const struct file_operations apds9960_fops = {
 
 static irqreturn_t apds9960_isr(int irq, void *data)
 {
+  struct i2c_client *client;
   struct apds9960_dev *apds9960 = data;
-  dev_info(&apds9960->client->dev, "interrupt received. key: %s\n", DEVICE_NAME);
+  client = apds9960->client;
+  u8 status = i2c_smbus_read_byte_data(client, APDS_STATUS);
+
+  if (status & APDS9960_STATUS_GINT) { // Gesture interrupt
+                                       // Read gesture apds9960 from FIFO (simplified example)
+    u8 fifo_level = i2c_smbus_read_byte_data(client, APDS9960_GSTATUS_REG) & 0x1F;
+
+    for (int i = 0; i < fifo_level; i++) {
+      u8 gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
+
+      // Decode gesture direction (example logic - see datasheet)
+      switch (gesture_data) {
+        case 0x01: // Up gesture
+          input_report_key(apds9960->input, KEY_UP, 1);
+          input_sync(apds9960->input);
+          input_report_key(apds9960->input, KEY_UP, 0);
+          input_sync(apds9960->input);
+          break;
+          // ... define cases for other directions
+      }
+    }
+  }
   return IRQ_HANDLED;
 }
 
@@ -277,6 +307,42 @@ static int apds9960_probe (struct i2c_client * client)
   i2c_set_clientdata(client,apds9960);
   /* Store pointer to I2C client */
   apds9960->client = client;
+
+  // Allocate input device
+  apds9960->input = devm_input_allocate_device(&client->dev);
+  if (!apds9960->input) {
+      dev_err(&client->dev, "Failed to allocate input device");
+      return -ENOMEM;
+  }
+
+  // Set input device name/ID
+  apds9960->input->name = "APDS-9960 Gesture Sensor";
+  apds9960->input->phys = "i2c::gesture";
+  apds9960->input->id.bustype = BUS_I2C;
+
+  // Register event types (KEY for gestures)
+  __set_bit(EV_KEY, apds9960->input->evbit);
+
+  // Define gesture keys (up/down/left/right)
+  input_set_capability(apds9960->input, EV_KEY, KEY_UP);
+  input_set_capability(apds9960->input, EV_KEY, KEY_DOWN);
+  input_set_capability(apds9960->input, EV_KEY, KEY_LEFT);
+  input_set_capability(apds9960->input, EV_KEY, KEY_RIGHT);
+
+  err = input_register_device(apds9960->input);
+  if (err) {
+      dev_err(&client->dev, "Failed to register input device");
+      return err;
+  }
+
+  // Power on and enable gesture mode (see datasheet registers)
+  i2c_smbus_write_byte_data(client, APDS_ENABLE, 
+                           APDS_ON_ENABLE | APDS_GESTURE_ENABLE );
+
+  // Set gesture thresholds (adjust based on testing)
+  // GESTURE_RIGHT_OFFSET_REGISTER, w/ gpulse on bits 5:0
+  i2c_smbus_write_byte_data(client, 0xA9, 0x89); // 16 pulses, 32 us
+  i2c_smbus_write_byte_data(client, APDS9960_GCONF4_REG, 0x01); // 4 gesture events
 
   /* Wait mechanism */
   init_waitqueue_head(&apds9960->wq);
@@ -315,6 +381,10 @@ static int apds9960_probe (struct i2c_client * client)
   apds9960->apds9960_miscdevice.name = apds9960->name;
   apds9960->apds9960_miscdevice.minor = MISC_DYNAMIC_MINOR;
   apds9960->apds9960_miscdevice.fops = &apds9960_fops;
+
+  // Prime device so that it's ready to read (takes 7ms)
+  apds9960_set_enable(apds9960, APDS_ON_ENABLE | APDS_PROX_ENABLE );
+
   /* Register the misc device */
   printk(KERN_ALERT "APDS9960 succesfully probed.");
   return misc_register(&apds9960->apds9960_miscdevice);
