@@ -34,6 +34,12 @@
 #define SEESAW_HW_ID_CODE	0x55	/* Expected hardware ID */
 #define	SEESAW_READING_DELAY	1000	/* Time in ms between readings */
 
+
+#define SEESAW_I2C_ADDRESS 0x36 	/* Default I2C address for Seesaw */
+#define SEESAW_STATUS_REG 0x00
+#define SEESAW_ADC_CHANNEL_ENABLE 0x07
+#define SEESAW_ADC_READ 0x09
+
 /* private structre to store device-specific information */
 struct seesaw_dev {
 	struct i2c_client *client;
@@ -44,170 +50,105 @@ struct seesaw_dev {
 };
 
 /* Read the seesaw register */
-static int seesaw_read_reg(struct seesaw_dev *seesaw, u8 reg_base,
-			u8 reg_addr, u8 *buf, size_t len)
+static int seesaw_read_reg(struct seesaw_dev *seesaw, u8 reg, u8 *buf, size_t len)
 {
+	struct i2c_msg msg[2] = {
+		{
+			.addr = seesaw->client->addr,
+			.flags = 0,
+			.len = 1,
+			.buf = &reg,
+		},	
+		{
+			.addr = seesaw->client->addr,
+			.flags = I2C_M_RD,
+			.len = len,
+			.buf = buf,
+		},
+	};
+	return i2c_transfer(seesaw->client->adapter, msg, 2);
+}
 
-	int ret;
-	u8 reg_buf[2] = {reg_base, reg_addr };
-
-	ret = i2c_master_send(seesaw->client, reg_buf, 2);
-	if (ret < 0)
-		return ret; 
-
-	if (reg_base == SEESAW_STATUS_BASE){
-		if(reg_addr == SEESAW_STATUS_TEMP)
-		msleep(5);
-		else if (reg_addr == SEESAW_TOUCH_CHANNEL)
-		usleep_range(1000, 2000);
-	}
-
-	ret = i2c_master_recv(seesaw->client, buf, len);
-	if (ret < 0)
-		return ret;
-	return 0;
-
-	/*struct i2c_msg msgs[2];
-	u8 reg_buf[2] = {reg_base, reg_addr};
-	int ret;
-
-	msgs[0].addr = seesaw->client->addr;
-	msgs[0].flags = 0;
-	msgs[0].len = 2;
-	msgs[0].buf = reg_buf;
-
-	msgs[1].addr = seesaw->client->addr;
-	msgs[1].flags = I2C_M_RD;
-	msgs[1].len = 2;
-	msgs[1].buf = buf; 
-
-	ret = i2c_transfer(seesaw->client->adapter, msgs, 2);
-	pr_info("ret: %d\n",ret);
-	return (ret == 2) ? 0 : ret;*/
+/* Write a register on the Seesaw sesnor */
+static int seesaw_write_reg(struct seesaw_dev *seesaw, u8 reg, u8 value)
+{
+	u8 buf[2] = {reg, value};
+	struct i2c_msg msg = {
+		.addr = seesaw->client->addr,
+		.flags = 0,
+		.len = 2,
+		.buf = buf,
+	};
+	return i2c_transfer(seesaw->client->adapter, &msg, 1);
 }
 
 /* Read the soil temperature for the seesaw soil sesnor */
-static int seesaw_read_temperature(struct seesaw_dev *seesaw, int *temp)
+static int seesaw_read_temperature(struct seesaw_dev *seesaw)
 {
-	u8 buf[4];
+	u8 buf[2];
 	int ret;
-	s32 raw_temp;
 
-	mutex_lock(&seesaw->lock);
-	ret = seesaw_read_reg(seesaw, SEESAW_STATUS_BASE, SEESAW_STATUS_TEMP,
-				buf, sizeof(buf));
-	mutex_unlock(&seesaw->lock);
-	if (ret < 0)
-		return ret;
+	/*mutex_lock(&seesaw->lock);*/
+	ret = seesaw_write_reg(seesaw, SEESAW_ADC_CHANNEL_ENABLE, 0x02);
+	if (ret < 0) return ret;
 
-	raw_temp = ((buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]);
-	*temp = (raw_temp * 100) >> 16; /* Convert to centidegrees */
-	return 0;
+	/* Read ADC value */
+	ret = seesaw_read_reg(seesaw, SEESAW_ADC_READ, buf, 2);
+	if (ret < 0) return ret;
+	/*mutex_unlock(&seesaw->lock);*/
+
+	return (buf[0] << 8) | buf[1];
 } 
 
-static int seesaw_read_moisture(struct seesaw_dev *seesaw, int *moisture)
+static int seesaw_read_moisture(struct seesaw_dev *seesaw)
 {
 	u8 buf[2];
 	int ret;
 
 	mutex_lock(&seesaw->lock);
-	ret = seesaw_read_reg(seesaw, SEESAW_STATUS_BASE, SEESAW_TOUCH_CHANNEL,	
-				buf, sizeof(buf));
-	mutex_unlock(&seesaw->lock);
+	/* Enable ADC channel 0 (moisture) */
+	ret = seesaw_write_reg(seesaw, SEESAW_ADC_CHANNEL_ENABLE, 0x01); 
+	if (ret < 0) return ret; 
 
-	if (ret < 0)
-		return ret;
+	/* Read ADC value */
+	ret = seesaw_read_reg(seesaw, SEESAW_ADC_READ, buf, 2);
+	if (ret < 0) return ret;
+	mutex_unlock(&seesaw->lock);
 	
-	*moisture = (buf[0] << 8 | buf[1]);
-	return 0;
+	return (buf[0] << 8) | buf[1];
 }
 
 /* User reading data from /dev/stemma */
-static ssize_t seesaw_read(struct file *file, char __user *userbuf,
+static ssize_t seesaw_read(struct file *file, char __user *buf,
 				size_t count, loff_t *ppos)
 {
 	pr_info("stemma_fops reading function\n");
 
-	int moisture, temperature, ret, len;
-	char buf[64];
-	char kbuf[64];
+	int moisture, temperature, len;
+	char data[32]; 
 	struct seesaw_dev *seesaw; 
+
+	/* Ensure file->private_data is valid */
+	if (!file->private_data){
+		pr_info("file->private_data is NULL\n");
+		return -EFAULT;
+	}
 
 	seesaw = container_of(file->private_data, struct seesaw_dev, seesaw_miscdevice);
 	
-	/* Write to the measurement trigger register
-	ret = i2c_smbus_write_byte_data(seesaw->client, STEMMA_MEASURE_CMD, 0x01); */
 
-	ret = seesaw_read_moisture(seesaw, &moisture);
-	if (ret < 0){
-		pr_info("Failed to trigger measurement, error: %d\n", ret);
+	moisture = seesaw_read_moisture(seesaw);
+	temperature = seesaw_read_temperature(seesaw);
 
-		switch(ret){
-			case -ENXIO:
-				dev_err(seesaw->dev, "No such I2C device\n");
-				break;
-			case -EAGAIN:	
-				dev_err(seesaw->dev, "resource temporarily unavailable -bus busy?\n");
-				break;
-			case -ETIMEDOUT:
-				dev_err(seesaw->dev, "I2C transaction timed out\n");
-				break;
-			case -EIO:
-				dev_err(seesaw->dev, "I/O Error - no ACK recevied?\n");
-				break;
-			default:
-				dev_err(seesaw->dev, "Unknown error\n");
-		}
-	}
-
-	ret = seesaw_read_temperature(seesaw, &temperature);
-	if (ret < 0)
-		return ret;
-
-	len = snprintf(kbuf, sizeof(kbuf), "moisture: %d\ntemperature: %d\n", moisture, temperature);
-
-	if (count < len)
-		return -EINVAL;
+	/* Format the data */
+	len = snprintf(data, sizeof(data), "Moisture: %d, Temperature: %d\n", moisture, temperature);
 	
-	/* wait for measurement to complete*/
-	msleep(SEESAW_READING_DELAY);
-
-	/* Read moisture data 
-	moisture  = i2c_smbus_read_byte_data(seesaw->client, STEMMA_TOUCH_REG);
-	if (moisture  < 0){
-		pr_info("Failed to read moisture data\n");
-		return -EFAULT;
-	}*/
-
-	/* Read temperature data 
-	temperature = i2c_smbus_read_word_data(seesaw->client, STEMMA_TEMP_REG);
-	if ( temperature < 0){
-		pr_info("Failed tor ead temperature data\n");
+	/* Copy data to userspace */
+	if (count < len) return -EINVAL; /* Ensure buffer is large enough */
+	if (copy_to_user(buf, data, len)){
 		return -EFAULT;
 	}
-	temperature = ((temperature * 200) / 65536) - 50;
-	
-
-	size = sprintf(buf,"Moisture: %02x, Temperature: %02x", moisture, temperature);*/
-
-	/*
-	 * Replace NULL by \n. It is not needed to have a char array
-	 * ended with \0 character.
-	 */
-	buf[len] = '\n';
-
-	/* send size+1 to include the \n character */
-	if (*ppos == 0){
-		/*if (copy_to_user(userbuf, buf, size+1)){*/
-		if (copy_to_user(userbuf, kbuf, strlen(kbuf))){
-			pr_info("Failed to return led_value to user space\n");
-			return -EFAULT;
-		}
-		*ppos+=1;
-		return len+1;
-	}
-	
-	return 0;
+	return len;
 }
 
 /* Called whenever a suser space write occurs on one of the character devices */
@@ -244,12 +185,22 @@ static ssize_t seesaw_write(struct file *file, const char __user *userbuf,
 	return count; 
 }
 
+/* Open function for the file operations */
+static int seesaw_open(struct inode *inode, struct file *file)
+{
+	struct seesaw_dev *seesaw = container_of(file->private_data, struct seesaw_dev,
+						seesaw_miscdevice);
+	file->private_data = seesaw;
+
+	return 0;
+}
 
 /* file operations to define which driver function are called when 
  * the user reads and writes to the device
  */
 static const struct file_operations seesaw_fops = {
 	.owner 	=	THIS_MODULE,
+	.open 	= 	seesaw_open,
 	.read 	=	seesaw_read,
 	.write 	=	seesaw_write,
 };
@@ -274,7 +225,7 @@ static int seesaw_probe(struct i2c_client *client)
 	 * Initialize the misc device, stemma is incremented 
 	 * after each probe call
 	 */
-	sprintf(seesaw->name, "stemma%02d", counter++);
+	sprintf(seesaw->name, "seesaw%02d", counter++);
 	dev_info(&client->dev, "stemma_probe is entered on %s\n", seesaw->name);
 
 	seesaw->seesaw_miscdevice.name = seesaw->name;
