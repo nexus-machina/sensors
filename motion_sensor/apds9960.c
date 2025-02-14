@@ -85,6 +85,7 @@ struct apds9960_dev {
   bool color_ready;
   struct timer_list timer;
   char name[8]; /* apds9960 */
+  struct work_struct gesture_work; // Add workqueue for bottom half
 };
 
 static const struct of_device_id apds9960_dt_ids[] = {
@@ -214,11 +215,11 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   }
   dev_info(&apds9960->client->dev, "Prox read");
 
-  // apds9960->color_ready = false;
-  // mod_timer(&apds9960->timer, msecs_to_jiffies(30));
-  // ret = wait_event_interruptible(apds9960->wq, apds9960->color_ready);
-  // if(ret)
-  //   return ret;
+  apds9960->color_ready = false;
+  mod_timer(&apds9960->timer, msecs_to_jiffies(30));
+  ret = wait_event_interruptible(apds9960->wq, apds9960->color_ready);
+  if(ret)
+    return ret;
 
   avalid = apds9960_read_colors_crgb(apds9960, &C, &R, &G, &B);
   dev_info(&apds9960->client->dev, "Color read");
@@ -260,20 +261,21 @@ static const struct file_operations apds9960_fops = {
   .read = apds9960_read_file,
   .write = apds9960_write_file,
 };
-
-static irqreturn_t apds9960_isr(int irq, void *data)
+static void gesture_work_handler(struct work_struct *work)
 {
-  struct i2c_client *client;
-  struct apds9960_dev *apds9960 = data;
-  client = apds9960->client;
-  u8 status = i2c_smbus_read_byte_data(client, APDS9960_STATUS);
-
-  if (status & APDS9960_STATUS_GINT) { // Gesture interrupt
-                                       // Read gesture apds9960 from FIFO (simplified example)
-    for (int i = 0; i < 4; i++) {
-      u8 gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
-
-      // Decode gesture direction (example logic - see datasheet)
+  struct apds9960_dev *apds9960 = container_of(work, struct apds9960_dev, gesture_work);
+  struct i2c_client *client = apds9960->client;
+  u8 status, gesture_data;
+  int i;
+  
+  // Read status register
+  status = i2c_smbus_read_byte_data(client, APDS9960_STATUS);
+  
+  if (status & APDS9960_STATUS_GINT) {
+    // Process gesture data from FIFO
+    for (i = 0; i < 4; i++) {
+      gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
+      
       switch (gesture_data) {
         case 0x01: // Up gesture
           input_report_key(apds9960->input, KEY_UP, 1);
@@ -281,10 +283,19 @@ static irqreturn_t apds9960_isr(int irq, void *data)
           input_report_key(apds9960->input, KEY_UP, 0);
           input_sync(apds9960->input);
           break;
-          // ... define cases for other directions
+        // Add other gesture cases here
       }
     }
   }
+}
+
+static irqreturn_t apds9960_isr(int irq, void *data)
+{
+  struct apds9960_dev *apds9960 = data;
+  
+  // Schedule bottom half immediately
+  schedule_work(&apds9960->gesture_work);
+  
   return IRQ_HANDLED;
 }
 
