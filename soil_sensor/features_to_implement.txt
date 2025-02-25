@@ -1,0 +1,26 @@
+Features to implement in the Adafruit STEMMA Soil Sensor
+
+[] LED Indicator Control 
+	Feature: Allow contorl of the LED (turn it on/off, adjust brightness)
+	Enhancements
+		- Create patterns or blinking behaviors to indicate status (e.g sensor 
+		ready, error, or low moisture levels)
+
+[] Soil Moisture Measurement
+	Feature: Retrieve and process the soil mosture reading
+	Enhancements:
+		- Normalize the raw capacitiance reading sinto persentage values (0 - 100%)
+
+[] Temperature Measurement
+	Feature: Read temperature values in Celsius and Fahrenheit 
+
+[] Power Management 
+	Feature: Implement low-power modes
+	Enchancements:
+		 - Enable sleep/wake functionality for energy-efficient operation
+		 	- Using I2C, put the microntroller into a low-power state and wake
+			 it only when a measurement is needed
+
+[] I2C Address Configureation
+	Feature: Read & change the I2C address dynamically.
+		
