@@ -241,6 +241,11 @@ static int seesaw_probe(struct i2c_client *client)
 	static int counter = 0;
 	struct seesaw_dev *seesaw;
 
+	if(client->addr == 0x36)
+		pr_info("We go the right device\n");
+	else
+		pr_info("We do not have the right device\n");
+
 	/* Allocate the stemma private structure */
 	seesaw = devm_kzalloc(&client->dev, sizeof(struct seesaw_dev), GFP_KERNEL);
 	
