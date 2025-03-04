@@ -290,14 +290,14 @@ static void seesaw_remove(struct i2c_client *client)
 
 /* list of devices supported by the driver */
 static const struct of_device_id seesaw_dt_ids[] = {
-	{ .compatible = "arrow,stemma", },
+	{ .compatible = "adafruit,seesaw", },
 	{}
 };
 MODULE_DEVICE_TABLE(of, seesaw_dt_ids);
 
 /* an array of i2c_device_id structures */
 static const struct i2c_device_id i2c_ids[] = {
-	{ .name = "stemma", },
+	{ .name = "seesaw", },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, i2c_ids);
@@ -308,7 +308,7 @@ static struct i2c_driver seesaw_driver = {
 	.remove	=	seesaw_remove,
 	.id_table =	i2c_ids,
 	.driver = {
-		.name	=	"stemma",
+		.name	=	"seesaw",
 		.owner	=	THIS_MODULE,	
 		.of_match_table = seesaw_dt_ids
 	},

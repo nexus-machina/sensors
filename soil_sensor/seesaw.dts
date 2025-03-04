@@ -7,8 +7,8 @@
 	fragment@0 {
 		target = <&i2c1>; /* Fragment targets the i2c1 node */
 		__overlay__ {
-			stemma: stemma@36{
-				compatible = "arrow,stemma";
+			seesaw: seesaw@36{
+				compatible = "adafruit,seesaw";
 				reg = <0x36>;
 				status = "okay";
 			};

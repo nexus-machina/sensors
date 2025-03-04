@@ -1,4 +1,4 @@
-obj-m := stemma_driver.o
+obj-m := seesaw_driver.o
 
 KERNEL_DIR ?= /lib/modules/$(shell uname -r)/build
 
