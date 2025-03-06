@@ -1,0 +1,10 @@
+# Ignore all .dtbo files
+*.dtbo
+
+# Ignore these
+*.ko
+*.o
+*.mod
+*.order
+*.symvers
+
