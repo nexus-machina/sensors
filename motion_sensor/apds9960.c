@@ -80,7 +80,7 @@ void apds9960_idle_assert_gesture(struct apds9960_dev* apds9960)
 {
   // GESTURE_RIGHT_OFFSET_REGISTER, w/ gpulse on bits 5:0
   // i2c_smbus_write_byte_data(apds9960->client, 0xA9, 0x89); // 16 pulses, 32 us
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN); // 4 gesture events
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE); // 4 gesture events
   apds9960_set_config_three(apds9960, 0);
   // Power on and enable gesture mode (see datasheet registers) apds9960->state = APDS9960_STATE_MOTION;
   apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_GESTURE_ENABLE);
@@ -137,7 +137,7 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   dev_info(&apds9960->client->dev, "Enter Read");
 
   apds9960_set_adc_time(apds9960, 0xff);
-  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 0, .pgain = 2, .again = 0});
+  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 1, .pgain = 2, .again = 0});
 
   apds9960_set_config_three(apds9960, APDS9960_PCMP_ENABLE);
   apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_PROX_ENABLE | APDS9960_ALS_ENABLE);
@@ -281,7 +281,6 @@ static int apds9960_probe (struct i2c_client * client)
       dev_err(&client->dev, "Failed to register input device");
       return err;
   }
-
 
   /* Wait mechanism */
   init_waitqueue_head(&apds9960->wq);
