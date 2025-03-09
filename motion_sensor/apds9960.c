@@ -200,7 +200,8 @@ static void gesture_work_handler(struct work_struct *work)
   struct i2c_client *client = apds9960->client;
   u8 status, gesture_data;
   int i;
-  dev_info(&client->dev, "Enter work handler\n");
+
+  dev_info(&client->dev, "In softirq work handler");
 
   // Read status register
   status = i2c_smbus_read_byte_data(client, APDS9960_STATUS);
@@ -208,7 +209,6 @@ static void gesture_work_handler(struct work_struct *work)
   if (status & APDS9960_STATUS_GINT) {
     // Process gesture data from each FIFO queue
     for (i = 0; i < 4; i++) {
-      dev_info(&client->dev, "Reading from %d...\n", i);
       gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
       
       switch (gesture_data) {
@@ -310,6 +310,8 @@ static int apds9960_probe (struct i2c_client * client)
     dev_info(&client->dev, "IRQ Request Err: %d\n", err);
     return -ENOENT;
   }
+
+  INIT_WORK(&apds9960->gesture_work, gesture_work_handler);
 
   /*
    * Initialize the misc device, apds9960 is incremented
