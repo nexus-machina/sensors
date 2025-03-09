@@ -81,6 +81,7 @@ void apds9960_idle_assert_gesture(struct apds9960_dev* apds9960)
   // GESTURE_RIGHT_OFFSET_REGISTER, w/ gpulse on bits 5:0
   // i2c_smbus_write_byte_data(apds9960->client, 0xA9, 0x89); // 16 pulses, 32 us
   i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE); // 4 gesture events
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF1_REG, 1<<6);
   apds9960_set_config_three(apds9960, 0);
   // Power on and enable gesture mode (see datasheet registers) apds9960->state = APDS9960_STATE_MOTION;
   apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_GESTURE_ENABLE);
@@ -141,18 +142,19 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
 
   apds9960_set_config_three(apds9960, APDS9960_PCMP_ENABLE);
   apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_PROX_ENABLE | APDS9960_ALS_ENABLE);
+
+  apds9960->color_ready = false;
+  apds9960->prox_ready = false;
+  ret = wait_event_interruptible(apds9960->wq, apds9960->prox_ready);
+  ret = wait_event_interruptible(apds9960->wq, apds9960->color_ready);
+  if(ret)
+    return ret;
+
   proximity = apds9960_read_proximity(apds9960);
   if(proximity < 0) {
     pr_info("Prox not valid, skipping!!!!");
   }
   dev_info(&apds9960->client->dev, "Prox read");
-
-  apds9960->color_ready = false;
-  mod_timer(&apds9960->timer, msecs_to_jiffies(30));
-  ret = wait_event_interruptible(apds9960->wq, apds9960->color_ready);
-  if(ret)
-    return ret;
-
   avalid = apds9960_read_colors_crgb(apds9960, &C, &R, &G, &B);
   dev_info(&apds9960->client->dev, "Color read");
 
@@ -207,22 +209,41 @@ static void gesture_work_handler(struct work_struct *work)
   status = i2c_smbus_read_byte_data(client, APDS9960_STATUS);
 
   if (status & APDS9960_STATUS_GINT) {
-    // Process gesture data from each FIFO queue
-    for (i = 0; i < 4; i++) {
-      gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
-      
-      switch (gesture_data) {
-        case 0x01: // Up gesture
-          input_report_key(apds9960->input, KEY_DOWN, 1);
-          input_sync(apds9960->input);
-          input_report_key(apds9960->input, KEY_UP, 0);
-          input_sync(apds9960->input);
-          break;
-        // Add other gesture cases here
+    dev_info(&client->dev, "GINT");
+    unsigned ififo;
+    for(ififo = 0; ififo < 4; ++ififo) {
+      // Process gesture data from each FIFO queue
+      for (i = 0; i < 4; i++) {
+        gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
+        
+        switch (gesture_data) {
+          default: // Up gesture
+            input_report_key(apds9960->input, KEY_DOWN, 1);
+            input_sync(apds9960->input);
+            input_report_key(apds9960->input, KEY_UP, 0);
+            input_sync(apds9960->input);
+            break;
+          // Add other gesture cases here
+        }
       }
     }
+    apds9960_idle_assert_gesture(apds9960);
+  } else {
+
+  if (status & APDS9960_STATUS_AVALID)
+    {
+      dev_info(&client->dev, "AVALID");
+      apds9960->color_ready = true;
+    }
+    if (status & APDS9960_STATUS_PVALID)
+    {
+      dev_info(&client->dev, "PVALID");
+      apds9960->prox_ready = true;
+    }
+    wake_up(&apds9960->wq);
   }
   apds9960_non_gest_clear(apds9960);
+  apds9960_set_enable(apds9960, APDS9960_ON_ENABLE);
 }
 
 static irqreturn_t apds9960_isr(int irq, void *data)
@@ -284,7 +305,6 @@ static int apds9960_probe (struct i2c_client * client)
 
   /* Wait mechanism */
   init_waitqueue_head(&apds9960->wq);
-  timer_setup(&apds9960->timer, sensor_timer_cb, 0);
 
   /* Get GPIO descriptor and IRQ from device tree */
   // Use gpio driver to setup pin
@@ -350,7 +370,6 @@ void apds9960_remove(struct i2c_client * client)
   misc_deregister(&apds9960->apds9960_miscdevice);
   devm_free_irq(&client->dev, apds9960->irq, apds9960);
   gpiod_put(apds9960->gpio);
-  del_timer(&apds9960->timer);
   dev_info(&client->dev,
       "apds9960_remove is exited on %s\n", apds9960->name);
 }

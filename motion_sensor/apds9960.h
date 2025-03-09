@@ -79,13 +79,13 @@
 #define APDS9960_BDATAH 0x9B
 
 // Enable bitfields 
-#define APDS9960_ON_ENABLE (1)
-#define APDS9960_ALS_ENABLE (1<<1)
+#define APDS9960_ON_ENABLE   (1)
+#define APDS9960_ALS_ENABLE  (1<<1)
 #define APDS9960_PROX_ENABLE (1<<2)
 #define APDS9960_WAIT_ENABLE (1<<3)
-#define APDS9960_ALS_INT_ENABLE (1<<4)
+#define APDS9960_ALS_INT_ENABLE  (1<<4)
 #define APDS9960_PROX_INT_ENABLE (1<<5)
-#define APDS9960_GESTURE_ENABLE (1<<6)
+#define APDS9960_GESTURE_ENABLE  (1<<6)
 
 // Gesture config four bitfields
 #define APDS9960_GCONF4_GIEN (1<<1)
@@ -132,6 +132,7 @@ struct apds9960_dev {
   int irq;
   wait_queue_head_t wq;
   bool color_ready;
+  bool prox_ready;
   struct timer_list timer;
   char name[8]; /* apds9960 */
   struct work_struct gesture_work; // Add workqueue for bottom half
