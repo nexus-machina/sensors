@@ -1,92 +1,4 @@
-#include <linux/module.h>
-#include <linux/delay.h>
-#include <linux/miscdevice.h>
-#include <linux/i2c.h>
-#include <linux/fs.h>
-#include <linux/uaccess.h>
-#include <linux/cdev.h>
-#include <linux/platform_device.h>
-#include <linux/interrupt.h>
-#include <linux/gpio/consumer.h>
-#include <linux/miscdevice.h>
-#include <linux/input.h>
-#include <linux/wait.h>
-#include <linux/timer.h>
-#include <linux/jiffies.h>
-
-#define APDS9960_MAJOR 42
-#define APDS9960_MAX_MINORS 1
-#define APDS9960_ADDR 0x39
-#define PROX_DATA_REG 0x9C
-#define DEVICE_NAME "apds9960"
-
-#define APDS9960_ENABLE 0x80
-#define APDS9960_PDATA 0x90 // prox data
-#define APDS9960_PILT 0x89
-#define APDS9960_PIHT 0x8B
-#define APDS9960_STATUS 0x92
-#define APDS9960_WAIT_TIME 0x83
-#define APDS9960_ADC_TIME 0x82
-#define APDS9960_CONTROL 0x8f
-#define APDS9960_PERS 0x8c
-#define APDS9960_CONFIG_THREE 0x9f
-
-#define APDS9960_GCONF4_REG 0xAB
-#define APDS9960_GSTATUS_REG 0xAF
-#define APDS9960_GFIFO_U_REG 0xFC
-
-#define APDS9960_STATUS_GINT (1<<2)
-
-// TODO Have this be configurable
-#define APDS9960_INT_PIN 23
-
-/*
- * Color data is reported using two bytes, one
- * register for the low order bits, the next for
- * the high order bits.
- *
- * Reading low order bits latches the high order bits
- * until the next read, preventing data corruption. The
- * same is done for the clear channel, which will latch
- * all other channels. This means that any read to clear
- * must also be a read of all channels, and any read to
- * one channel must be a complete read. Otherwise, this
- * will lock-up the sensor.
- */
-// clear data
-#define APDS9960_CDATAL 0x94 // low byte
-#define APDS9960_CDATAH 0x95 // high byte
-// read data
-#define APDS9960_RDATAL 0x96
-#define APDS9960_RDATAH 0x97
-// green data
-#define APDS9960_GDATAL 0x98
-#define APDS9960_GDATAH 0x99
-// blue data
-#define APDS9960_BDATAL 0x9A
-#define APDS9960_BDATAH 0x9B
-
-// Enable bitfields 
-#define APDS9960_ON_ENABLE (1)
-#define APDS9960_ALS_ENABLE (1<<1)
-#define APDS9960_PROX_ENABLE (1<<2)
-#define APDS9960_WAIT_ENABLE (1<<3)
-#define APDS9960_ALS_INT_ENABLE (1<<4)
-#define APDS9960_PROX_INT_ENABLE (1<<5)
-#define APDS9960_GESTURE_ENABLE (1<<6)
-
-struct apds9960_dev {
-  struct i2c_client* client;
-  struct miscdevice apds9960_miscdevice;
-  struct input_dev *input;
-  struct gpio_desc *gpio;
-  int irq;
-  wait_queue_head_t wq;
-  bool color_ready;
-  struct timer_list timer;
-  char name[8]; /* apds9960 */
-  struct work_struct gesture_work; // Add workqueue for bottom half
-};
+#include "apds9960.h"
 
 static const struct of_device_id apds9960_dt_ids[] = {
   { .compatible = "arrow,apds", },
@@ -127,11 +39,10 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
 }
 
 // Sets gain controls. Bit range 1:0 (leftshift 0) light gain 
-// 3:2 (leftshift 2) is for proximity gain
-// 7:6 (leftshift 6) is for led gain
-static void apds9960_set_config(struct apds9960_dev* apds9960, int value)
+void apds9960_set_control_1(struct apds9960_dev* apds9960, struct apds9960_ctrl_1_cfg cfg)
 {
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_CONTROL, value);
+  u8 write_value = cfg.ldrive << 6 | cfg.pgain << 2 | cfg.again;
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_CONTROL_1, write_value);
 }
 
 static void apds9960_set_enable(struct apds9960_dev* apds9960, int value)
@@ -144,14 +55,35 @@ static void apds9960_set_adc_time(struct apds9960_dev* apds9960, int value)
   i2c_smbus_write_byte_data(apds9960->client, APDS9960_ADC_TIME, value);
 }
 
+// Valid since the remaining bits are reserved
 static void apds9960_set_prox_pers(struct apds9960_dev* apds9960, u8 value)
 {
   i2c_smbus_write_byte_data(apds9960->client, APDS9960_PERS, value << 4);
 }
 
-static void apds9960_set_sleep_after_interrupt(struct apds9960_dev* apds9960, u8 value)
+static void apds9960_set_config_three(struct apds9960_dev* apds9960, u8 value)
 {
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_CONFIG_THREE, (value & 1) << 4);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_CONFIG_THREE, value);
+}
+
+void apds9960_non_gest_clear(struct apds9960_dev* apds9960)
+{
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_AICLEAR, 0);
+}
+
+void apds9960_assert_pon(struct apds9960_dev* apds9960)
+{
+  apds9960_set_enable(apds9960, APDS9960_ON_ENABLE);
+}
+
+void apds9960_idle_assert_gesture(struct apds9960_dev* apds9960)
+{
+  // GESTURE_RIGHT_OFFSET_REGISTER, w/ gpulse on bits 5:0
+  // i2c_smbus_write_byte_data(apds9960->client, 0xA9, 0x89); // 16 pulses, 32 us
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN); // 4 gesture events
+  apds9960_set_config_three(apds9960, 0);
+  // Power on and enable gesture mode (see datasheet registers) apds9960->state = APDS9960_STATE_MOTION;
+  apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_GESTURE_ENABLE);
 }
 
 // Returns 0 on success, and sets the outparams to the color values
@@ -205,10 +137,10 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   dev_info(&apds9960->client->dev, "Enter Read");
 
   apds9960_set_adc_time(apds9960, 0xff);
-  apds9960_set_config(apds9960, 3 | 2 << 2 | 0 << 6);
+  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 0, .pgain = 2, .again = 0});
 
+  apds9960_set_config_three(apds9960, APDS9960_PCMP_ENABLE);
   apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_PROX_ENABLE | APDS9960_ALS_ENABLE);
-  apds9960_set_sleep_after_interrupt(apds9960, 0);
   proximity = apds9960_read_proximity(apds9960);
   if(proximity < 0) {
     pr_info("Prox not valid, skipping!!!!");
@@ -232,9 +164,9 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
 
   apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_PROX_ENABLE | APDS9960_PROX_INT_ENABLE);
   // Setup interrupt thresholds just for testing purposes
-  apds9960_set_prox_pers(apds9960, 1);
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_PILT, 0x10);
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_PIHT, 0xa0);
+  // apds9960_set_prox_pers(apds9960, 1);
+  // i2c_smbus_write_byte_data(apds9960->client, APDS9960_PILT, 0x10);
+  // i2c_smbus_write_byte_data(apds9960->client, APDS9960_PIHT, 0xa0);
 
   // Prepare the output buffer
   size = sprintf(buf, "Prox: %02x, CRGB: C(%04x) R(%04x) G(%04x) B(%04x)",
@@ -261,24 +193,27 @@ static const struct file_operations apds9960_fops = {
   .read = apds9960_read_file,
   .write = apds9960_write_file,
 };
+
 static void gesture_work_handler(struct work_struct *work)
 {
   struct apds9960_dev *apds9960 = container_of(work, struct apds9960_dev, gesture_work);
   struct i2c_client *client = apds9960->client;
   u8 status, gesture_data;
   int i;
-  
+  dev_info(&client->dev, "Enter work handler\n");
+
   // Read status register
   status = i2c_smbus_read_byte_data(client, APDS9960_STATUS);
-  
+
   if (status & APDS9960_STATUS_GINT) {
-    // Process gesture data from FIFO
+    // Process gesture data from each FIFO queue
     for (i = 0; i < 4; i++) {
+      dev_info(&client->dev, "Reading from %d...\n", i);
       gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
       
       switch (gesture_data) {
         case 0x01: // Up gesture
-          input_report_key(apds9960->input, KEY_UP, 1);
+          input_report_key(apds9960->input, KEY_DOWN, 1);
           input_sync(apds9960->input);
           input_report_key(apds9960->input, KEY_UP, 0);
           input_sync(apds9960->input);
@@ -287,15 +222,16 @@ static void gesture_work_handler(struct work_struct *work)
       }
     }
   }
+  apds9960_non_gest_clear(apds9960);
 }
 
 static irqreturn_t apds9960_isr(int irq, void *data)
 {
   struct apds9960_dev *apds9960 = data;
-  
+
   // Schedule bottom half immediately
   schedule_work(&apds9960->gesture_work);
-  
+
   return IRQ_HANDLED;
 }
 
@@ -346,14 +282,6 @@ static int apds9960_probe (struct i2c_client * client)
       return err;
   }
 
-  // Power on and enable gesture mode (see datasheet registers)
-  i2c_smbus_write_byte_data(client, APDS9960_ENABLE, 
-                           APDS9960_ON_ENABLE | APDS9960_GESTURE_ENABLE );
-
-  // Set gesture thresholds (adjust based on testing)
-  // GESTURE_RIGHT_OFFSET_REGISTER, w/ gpulse on bits 5:0
-  i2c_smbus_write_byte_data(client, 0xA9, 0x89); // 16 pulses, 32 us
-  i2c_smbus_write_byte_data(client, APDS9960_GCONF4_REG, 0x01); // 4 gesture events
 
   /* Wait mechanism */
   init_waitqueue_head(&apds9960->wq);
@@ -380,7 +308,7 @@ static int apds9960_probe (struct i2c_client * client)
 
   err = devm_request_irq(&client->dev, apds9960->irq, apds9960_isr, IRQF_TRIGGER_FALLING, DEVICE_NAME, apds9960);
   if(err) {
-    dev_info(&client->dev, "ERM, what the sigma!?: %d\n", err);
+    dev_info(&client->dev, "IRQ Request Err: %d\n", err);
     return -ENOENT;
   }
 
@@ -393,6 +321,15 @@ static int apds9960_probe (struct i2c_client * client)
   apds9960->apds9960_miscdevice.minor = MISC_DYNAMIC_MINOR;
   apds9960->apds9960_miscdevice.fops = &apds9960_fops;
 
+  apds9960_assert_pon(apds9960);
+
+  // Configure gain controls now so that the gesture engine can make use of them
+  apds9960_set_adc_time(apds9960, 0xff);
+  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 0, .pgain = 2, .again = 0});
+  apds9960_set_config_three(apds9960, APDS9960_PCMP_ENABLE);
+
+  apds9960_idle_assert_gesture(apds9960);
+
   /* Register the misc device */
   dev_info(&client->dev, "apds9960 probe successful");
   return misc_register(&apds9960->apds9960_miscdevice);
@@ -404,6 +341,8 @@ void apds9960_remove(struct i2c_client * client)
   struct apds9960_dev * apds9960;
   /* Get device structure from bus device context */
   apds9960 = i2c_get_clientdata(client);
+  /* Go to sleep... */
+  apds9960_set_enable(apds9960, 0);
   dev_info(&client->dev,
       "apds9960_remove is entered on %s\n", apds9960->name);
   /* Deregister misc device */
