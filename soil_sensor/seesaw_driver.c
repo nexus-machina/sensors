@@ -51,6 +51,15 @@ struct seesaw_dev {
 	char name[8]; /* stemmaXX */
 };
 
+static int seesaw_read_raw(struct iio_dev *iio,
+			struct iio_chan_spec const *channel, int *val1,
+			int *val2, long mask)
+{
+	pr_info("Conduction seesaw read raw function\n");
+
+	return 0;
+}
+
 static const struct iio_chan_spec seesaw_channel[] = {
 	{
 		.type = IIO_TEMP,
@@ -64,7 +73,7 @@ static const struct iio_chan_spec seesaw_channel[] = {
 /* Information about the device */
 static const struct iio_info seesaw_info = {
 	.read_raw = seesaw_read_raw,
-	.attrs = &seesaw_attribute_group,
+	/*.attrs = &seesaw_attribute_group,*/
 };
 
 static int seesaw_probe(struct i2c_client *client)
@@ -73,7 +82,7 @@ static int seesaw_probe(struct i2c_client *client)
 	struct seesaw_dev *seesaw;
 	
 	/* Allocate memory for the IIO device */
-	indio_dev = devm_iio_device_alloc(client->dev, sizeof(seesaw));
+	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(seesaw));
 	if (!indio_dev)
 		return -ENOMEM;
 
@@ -82,7 +91,7 @@ static int seesaw_probe(struct i2c_client *client)
 	seesaw->client = client;
 	indio_dev->name = dev_name(&client->dev); 
 	indio_dev->modes = INDIO_DIRECT_MODE;
-	indio_dev->info = seesaw_info;
+	indio_dev->info = &seesaw_info;
 
 	indio_dev->channels = seesaw_channel;
 	indio_dev->num_channels = ARRAY_SIZE(seesaw_channel);
