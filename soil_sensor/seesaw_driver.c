@@ -26,7 +26,6 @@
 #define SEESAW_STATUS_BASE	0x00
 #define SEESAW_GPIO_BASE	0x01
 #define SEESAW_SERCOMO_BASE 	0x02
-
 /* Function Addresses */
 #define SEESAW_STATUS_HW_ID	0x01
 #define SEESAW_STATUS_VERSION	0x02
@@ -51,18 +50,70 @@ struct seesaw_dev {
 	char name[8]; /* stemmaXX */
 };
 
-static int seesaw_read_raw(struct iio_dev *iio,
+static int seesaw_read(struct seesaw_dev *seesaw, int *val)
+{
+	struct i2c_client *client = seesaw->client;
+	u8 buf[4] = {0,0,0,0};
+	int ret;
+
+	mutex_lock(&seesaw->lock);
+	
+	ret = i2c_master_recv(client, buf, 3);
+	if (ret < 0){
+		pr_info("i2c_master_recv failed\n");
+		return ret;
+	}
+
+	mutex_unlock(&seesaw->lock);
+
+	return ret;
+}
+
+static int seesaw_read_raw(struct iio_dev *iio_dev,
 			struct iio_chan_spec const *channel, int *val1,
 			int *val2, long mask)
 {
-	pr_info("Conduction seesaw read raw function\n");
+	struct seesaw_dev *seesaw = iio_priv(iio_dev);
+	int ret; 
 
-	return 0;
+	pr_info("Conducting seesaw read raw function\n");
+
+	if (mask == IIO_CHAN_INFO_RAW){
+		pr_info("IIO_CHAN_INFO_RAW\n");
+		ret = seesaw_read(seesaw, val1);
+		if (ret < 0)
+			return ret;
+	}else
+		pr_info("Somethign different");
+
+	return IIO_VAL_INT;
 }
+
+static ssize_t seesaw_show_sample_freqs(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf,"Callback for seesaw attribute\n");
+}
+
+static IIO_DEVICE_ATTR(sampling_frequency_available, S_IRUGO,
+		seesaw_show_sample_freqs, NULL, 0);
+
+/* An arrary of pointers to the attributes */
+static struct attribute *seesaw_attributes[] = {
+	&iio_dev_attr_sampling_frequency_available.dev_attr.attr,
+	NULL, 
+};
+
+/* Seesaw attribute group */
+static const struct attribute_group seesaw_attribute_group = {
+	.name = "seesaw_group",
+	.attrs = seesaw_attributes,
+};
 
 static const struct iio_chan_spec seesaw_channel[] = {
 	{
-		.type = IIO_TEMP,
+		/*.type = IIO_TEMP,*/
+		.type = IIO_CAPACITANCE,
 		.indexed = 0,
 		.channel = 0,
 		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) | \
@@ -73,16 +124,18 @@ static const struct iio_chan_spec seesaw_channel[] = {
 /* Information about the device */
 static const struct iio_info seesaw_info = {
 	.read_raw = seesaw_read_raw,
-	/*.attrs = &seesaw_attribute_group,*/
+	.attrs = &seesaw_attribute_group,
 };
 
 static int seesaw_probe(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev;
 	struct seesaw_dev *seesaw;
+
+	pr_info("Execution starts here\n");
 	
 	/* Allocate memory for the IIO device */
-	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(seesaw));
+	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*seesaw));
 	if (!indio_dev)
 		return -ENOMEM;
 
