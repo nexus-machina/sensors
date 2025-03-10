@@ -12,14 +12,6 @@ static const struct i2c_device_id i2c_ids[] = {
 };
 MODULE_DEVICE_TABLE(i2c, i2c_ids);
 
-/* Timer callback that marks data as ready and wakes waiting processes */
-static void sensor_timer_cb(struct timer_list *t)
-{
-    struct apds9960_dev *dev = from_timer(dev, t, timer);
-    dev->color_ready = true;
-    wake_up(&dev->wq);
-}
-
 static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf,
     size_t count, loff_t *ppos)
 {
@@ -34,7 +26,7 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
   /* Convert the string to an unsigned long */
   ret = kstrtoul(buf, 0, &val);
 
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_ENABLE, val);
+  dev_info(&apds9960->client->dev, "TODO: Write commands");
   return count;
 }
 
@@ -143,12 +135,14 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   apds9960_set_config_three(apds9960, APDS9960_PCMP_ENABLE);
   apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_PROX_ENABLE | APDS9960_ALS_ENABLE);
 
-  apds9960->color_ready = false;
-  apds9960->prox_ready = false;
-  ret = wait_event_interruptible(apds9960->wq, apds9960->prox_ready);
-  ret = wait_event_interruptible(apds9960->wq, apds9960->color_ready);
-  if(ret)
+  apds9960->data_ready = false;
+  apds9960->pvalid = false;
+  apds9960->avalid = false;
+
+  ret = wait_event_interruptible(apds9960->wq, &apds9960->data_ready);
+  if(ret) {
     return ret;
+  }
 
   proximity = apds9960_read_proximity(apds9960);
   if(proximity < 0) {
@@ -215,7 +209,7 @@ static void gesture_work_handler(struct work_struct *work)
       // Process gesture data from each FIFO queue
       for (i = 0; i < 4; i++) {
         gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
-        
+
         switch (gesture_data) {
           default: // Up gesture
             input_report_key(apds9960->input, KEY_DOWN, 1);
@@ -228,22 +222,24 @@ static void gesture_work_handler(struct work_struct *work)
       }
     }
     apds9960_idle_assert_gesture(apds9960);
-  } else {
-
-  if (status & APDS9960_STATUS_AVALID)
+  } else if (status & APDS9960_STATUS_AVALID || status & APDS9960_STATUS_PVALID) {
+    if (status & APDS9960_STATUS_AVALID)
     {
       dev_info(&client->dev, "AVALID");
-      apds9960->color_ready = true;
+      apds9960->avalid = true;
     }
     if (status & APDS9960_STATUS_PVALID)
     {
       dev_info(&client->dev, "PVALID");
-      apds9960->prox_ready = true;
+      apds9960->pvalid = true;
     }
+    apds9960->data_ready = true;
     wake_up(&apds9960->wq);
   }
+
   apds9960_non_gest_clear(apds9960);
   apds9960_set_enable(apds9960, APDS9960_ON_ENABLE);
+  enable_irq(apds9960->irq);
 }
 
 static irqreturn_t apds9960_isr(int irq, void *data)
@@ -251,6 +247,7 @@ static irqreturn_t apds9960_isr(int irq, void *data)
   struct apds9960_dev *apds9960 = data;
 
   // Schedule bottom half immediately
+  disable_irq_nosync(apds9960->irq);
   schedule_work(&apds9960->gesture_work);
 
   return IRQ_HANDLED;

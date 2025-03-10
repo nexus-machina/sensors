@@ -128,11 +128,13 @@ struct apds9960_dev {
   struct miscdevice apds9960_miscdevice;
   struct input_dev *input;
   struct gpio_desc *gpio;
+  // struct mutex lock;
   enum apds9960_state_t state;
   int irq;
   wait_queue_head_t wq;
-  bool color_ready;
-  bool prox_ready;
+  bool data_ready;
+  bool avalid;
+  bool pvalid;
   struct timer_list timer;
   char name[8]; /* apds9960 */
   struct work_struct gesture_work; // Add workqueue for bottom half
