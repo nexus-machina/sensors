@@ -65,18 +65,19 @@ void apds9960_non_gest_clear(struct apds9960_dev* apds9960)
 
 void apds9960_assert_pon(struct apds9960_dev* apds9960)
 {
-  apds9960_set_enable(apds9960, APDS9960_ON_ENABLE);
+  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
 }
 
 void apds9960_idle_assert_gesture(struct apds9960_dev* apds9960)
 {
   // GESTURE_RIGHT_OFFSET_REGISTER, w/ gpulse on bits 5:0
-  // i2c_smbus_write_byte_data(apds9960->client, 0xA9, 0x89); // 16 pulses, 32 us
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE); // 4 gesture events
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF1_REG, 1<<6);
-  apds9960_set_config_three(apds9960, 0);
+  // i2c_smbus_write_byte_data(apds9960->client, APDS9960_GOFFSET_R, 0x89); // 16 pulses, 32 us
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF1_REG, 1<<6); // interrupt after 4 gesture events
+  apds9960_set_config_three(apds9960, APDS9960_CONFIG_PCMP_ENABLE);
   // Power on and enable gesture mode (see datasheet registers) apds9960->state = APDS9960_STATE_MOTION;
-  apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_GESTURE_ENABLE);
+  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON | APDS9960_ENABLE_GESTURE);
+  // asserting gmode actually forces the apds9960 to ender the gesture engine
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE);
 }
 
 // Returns 0 on success, and sets the outparams to the color values
@@ -132,8 +133,8 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   apds9960_set_adc_time(apds9960, 0xff);
   apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 1, .pgain = 2, .again = 0});
 
-  apds9960_set_config_three(apds9960, APDS9960_PCMP_ENABLE);
-  apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_PROX_ENABLE | APDS9960_ALS_ENABLE);
+  apds9960_set_config_three(apds9960, APDS9960_CONFIG_PCMP_ENABLE);
+  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON | APDS9960_ENABLE_PROX | APDS9960_ENABLE_ALS);
 
   apds9960->data_ready = false;
   apds9960->pvalid = false;
@@ -158,7 +159,7 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
       return -EFAULT;
   }
 
-  apds9960_set_enable(apds9960, APDS9960_ON_ENABLE | APDS9960_PROX_ENABLE | APDS9960_PROX_INT_ENABLE);
+  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON | APDS9960_ENABLE_PROX | APDS9960_ENABLE_PROX_INT);
   // Setup interrupt thresholds just for testing purposes
   // apds9960_set_prox_pers(apds9960, 1);
   // i2c_smbus_write_byte_data(apds9960->client, APDS9960_PILT, 0x10);
@@ -167,6 +168,7 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   // Prepare the output buffer
   size = sprintf(buf, "Prox: %02x, CRGB: C(%04x) R(%04x) G(%04x) B(%04x)",
                  proximity, C, R, G, B);
+
   /*
    * Replace NULL by \n. It is not needed to have a char array
    * ended with \0 character.
@@ -204,8 +206,9 @@ static void gesture_work_handler(struct work_struct *work)
 
   if (status & APDS9960_STATUS_GINT) {
     dev_info(&client->dev, "GINT");
-    unsigned ififo;
-    for(ififo = 0; ififo < 4; ++ififo) {
+    u8 gflvl = i2c_smbus_read_byte_data(client, APDS9960_FIFO_LEVEL);
+    u8 ififo;
+    for(ififo = 0; ififo < gflvl; ++ififo) {
       // Process gesture data from each FIFO queue
       for (i = 0; i < 4; i++) {
         gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
@@ -221,7 +224,6 @@ static void gesture_work_handler(struct work_struct *work)
         }
       }
     }
-    apds9960_idle_assert_gesture(apds9960);
   } else if (status & APDS9960_STATUS_AVALID || status & APDS9960_STATUS_PVALID) {
     if (status & APDS9960_STATUS_AVALID)
     {
@@ -238,7 +240,7 @@ static void gesture_work_handler(struct work_struct *work)
   }
 
   apds9960_non_gest_clear(apds9960);
-  apds9960_set_enable(apds9960, APDS9960_ON_ENABLE);
+  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
   enable_irq(apds9960->irq);
 }
 
@@ -343,9 +345,10 @@ static int apds9960_probe (struct i2c_client * client)
 
   // Configure gain controls now so that the gesture engine can make use of them
   apds9960_set_adc_time(apds9960, 0xff);
-  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 0, .pgain = 2, .again = 0});
-  apds9960_set_config_three(apds9960, APDS9960_PCMP_ENABLE);
+  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 1, .pgain = 2, .again = 1});
+  apds9960_set_config_three(apds9960, APDS9960_CONFIG_PCMP_ENABLE);
 
+  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
   apds9960_idle_assert_gesture(apds9960);
 
   /* Register the misc device */
@@ -370,7 +373,6 @@ void apds9960_remove(struct i2c_client * client)
   dev_info(&client->dev,
       "apds9960_remove is exited on %s\n", apds9960->name);
 }
-
 
 static struct i2c_driver apds9960_driver = {
   .driver = {

@@ -24,12 +24,13 @@
 #define APDS9960_PDATA 0x90 // prox data
 #define APDS9960_PILT 0x89
 #define APDS9960_PIHT 0x8B
-#define APDS9960_STATUS 0x92
+#define APDS9960_STATUS 0x93
 #define APDS9960_WAIT_TIME 0x83
 #define APDS9960_ADC_TIME 0x82
 #define APDS9960_CONTROL_1 0x8f
 #define APDS9960_PERS 0x8c
 #define APDS9960_CONFIG_THREE 0x9f
+#define APDS9960_FIFO_LEVEL 0xAE
 
 // Clear interrupt registers
 #define APDS9960_IFORCE  0xE4   // forces an interrupt
@@ -79,13 +80,13 @@
 #define APDS9960_BDATAH 0x9B
 
 // Enable bitfields 
-#define APDS9960_ON_ENABLE   (1)
-#define APDS9960_ALS_ENABLE  (1<<1)
-#define APDS9960_PROX_ENABLE (1<<2)
-#define APDS9960_WAIT_ENABLE (1<<3)
-#define APDS9960_ALS_INT_ENABLE  (1<<4)
-#define APDS9960_PROX_INT_ENABLE (1<<5)
-#define APDS9960_GESTURE_ENABLE  (1<<6)
+#define APDS9960_ENABLE_ON   (1)
+#define APDS9960_ENABLE_ALS  (1<<1)
+#define APDS9960_ENABLE_PROX (1<<2)
+#define APDS9960_ENABLE_WAIT (1<<3)
+#define APDS9960_ENABLE_ALS_INT  (1<<4)
+#define APDS9960_ENABLE_PROX_INT (1<<5)
+#define APDS9960_ENABLE_GESTURE  (1<<6)
 
 // Gesture config four bitfields
 #define APDS9960_GCONF4_GIEN (1<<1)
@@ -101,7 +102,7 @@
 #define APDS9960_STATUS_CPSAT (1<<7)
 
 // Configuration three
-#define APDS9960_PCMP_ENABLE (1<<5)
+#define APDS9960_CONFIG_PCMP_ENABLE (1<<5)
 
 // Struct arguments below
 struct apds9960_ctrl_1_cfg {
