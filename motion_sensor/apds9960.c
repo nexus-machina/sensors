@@ -47,6 +47,11 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
   bool avalid = status & APDS9960_STATUS_AVALID;
   dev_info(&apds9960->client->dev, "GSTATUS { cpsat: %d pgsat: %d pint: %d aint: %d gint: %d pvalid: %d avalid: %d }", cpsat, pgsat, pint, aint, gint, pvalid, avalid);
 
+  u8 gconf = i2c_smbus_read_byte_data(apds9960->client, APDS9960_GCONF4_REG);
+  bool gmode = gconf & APDS9960_GCONF4_GMODE;
+  bool gien = gconf & APDS9960_GCONF4_GIEN;
+  dev_info(&apds9960->client->dev, "GSTATUS { gien: %d, gmode: %d }", gien, gmode);
+
   return count;
 }
 
@@ -241,26 +246,24 @@ static void gesture_work_handler(struct work_struct *work)
   u8 status, gesture_data;
   int i;
 
-  dev_info(&client->dev, "In softirq work handler");
-
   // Read status register
   status = i2c_smbus_read_byte_data(client, APDS9960_STATUS);
 
   if (status & APDS9960_STATUS_GINT) {
-    dev_info(&client->dev, "GINT");
     u8 gflvl = i2c_smbus_read_byte_data(client, APDS9960_FIFO_LEVEL);
-    dev_info(&client->dev, "gflvl: %d", gflvl);
     u8 gstatus = i2c_smbus_read_byte_data(client, APDS9960_GSTATUS_REG);
     if(gstatus & APDS9960_GSTATUS_GFOV)
     {
       dev_err(&client->dev, "Overflow event detected!!!");
     }
-    u8 ififo;
-    for(ififo = 0; ififo < gflvl; ++ififo) {
+    while(gflvl) {
       // Process gesture data from each FIFO queue
       for (i = 0; i < 4; i++) {
         gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
-        dev_info(&client->dev, "%x:%d", APDS9960_GFIFO_U_REG + i, gesture_data);
+        // TODO This right here needs to run a basic gesture detection algorithm by looking
+        // at the values reported by each channel (UDLR)
+        //
+        // Make sure it's simple, then report to linux input system
 
         // switch (gesture_data) {
         //   default: // Up gesture
@@ -272,7 +275,10 @@ static void gesture_work_handler(struct work_struct *work)
         //   // Add other gesture cases here
         // }
       }
+      gflvl = i2c_smbus_read_byte_data(client, APDS9960_FIFO_LEVEL);
     }
+    // assert gmode -> continue gesture data collection
+    i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE);
   } else if (status & APDS9960_STATUS_AVALID || status & APDS9960_STATUS_PVALID) {
     if (status & APDS9960_STATUS_AVALID)
     {
