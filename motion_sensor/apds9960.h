@@ -31,6 +31,8 @@
 #define APDS9960_PERS 0x8c
 #define APDS9960_CONFIG_THREE 0x9f
 #define APDS9960_FIFO_LEVEL 0xAE
+#define APDS9960_GEXTH 0xA1
+#define APDS9960_GPULSE_REG 0xA6
 
 // Clear interrupt registers
 #define APDS9960_IFORCE  0xE4   // forces an interrupt
@@ -88,6 +90,10 @@
 #define APDS9960_ENABLE_PROX_INT (1<<5)
 #define APDS9960_ENABLE_GESTURE  (1<<6)
 
+// Gesture Status bitset
+#define APDS9960_GSTATUS_GFOV (1<<1)
+#define APDS9960_GSTATUS_GVALID (1)
+
 // Gesture config four bitfields
 #define APDS9960_GCONF4_GIEN (1<<1)
 #define APDS9960_GCONF4_GMODE (1)
@@ -109,6 +115,24 @@ struct apds9960_ctrl_1_cfg {
   unsigned ldrive :2;
   unsigned pgain :2;
   unsigned again :2;
+};
+
+struct apds9960_gconf_1_cfg {
+  u8 gfifoth :2;
+  u8 gexmsk :4;
+  u8 gexpers :2;
+};
+
+struct apds9960_gconf_2_cfg {
+  // u8 _reserved:1;
+  u8 ggain :2;
+  u8 gldrive :2;
+  u8 gwtime :3;
+};
+
+struct apds9960_gpulse_cfg {
+  u8 gplen :2;
+  u8 gpulse :6;
 };
 
 /* 

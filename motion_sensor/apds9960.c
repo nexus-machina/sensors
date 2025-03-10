@@ -26,7 +26,27 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
   /* Convert the string to an unsigned long */
   ret = kstrtoul(buf, 0, &val);
 
-  dev_info(&apds9960->client->dev, "TODO: Write commands");
+  dev_info(&apds9960->client->dev, "TODO: Write commands, instead here's a state report:");
+  u8 gstatus = i2c_smbus_read_byte_data(apds9960->client, APDS9960_GSTATUS_REG);
+  bool gfov = false, gvalid = false;
+  if(gstatus & APDS9960_GSTATUS_GFOV) {
+    gfov = true;
+  }
+  if(gstatus & APDS9960_GSTATUS_GVALID) {
+    gvalid = true;
+  }
+  dev_info(&apds9960->client->dev, "GSTATUS { gfov: %d, gvalid: %d }", gfov, gvalid);
+
+  u8 status = i2c_smbus_read_byte_data(apds9960->client, APDS9960_STATUS);
+  bool cpsat = status & APDS9960_STATUS_CPSAT;
+  bool pgsat = status & APDS9960_STATUS_PGSTAT;
+  bool pint = status & APDS9960_STATUS_PINT;
+  bool aint = status & APDS9960_STATUS_AINT;
+  bool gint = status & APDS9960_STATUS_GINT;
+  bool pvalid = status & APDS9960_STATUS_PVALID;
+  bool avalid = status & APDS9960_STATUS_AVALID;
+  dev_info(&apds9960->client->dev, "GSTATUS { cpsat: %d pgsat: %d pint: %d aint: %d gint: %d pvalid: %d avalid: %d }", cpsat, pgsat, pint, aint, gint, pvalid, avalid);
+
   return count;
 }
 
@@ -35,6 +55,24 @@ void apds9960_set_control_1(struct apds9960_dev* apds9960, struct apds9960_ctrl_
 {
   u8 write_value = cfg.ldrive << 6 | cfg.pgain << 2 | cfg.again;
   i2c_smbus_write_byte_data(apds9960->client, APDS9960_CONTROL_1, write_value);
+}
+
+void apds9960_set_gconf_1(struct apds9960_dev* apds9960, struct apds9960_gconf_1_cfg cfg)
+{
+  u8 write_value = cfg.gfifoth << 6 | cfg.gexmsk << 2 | cfg.gexpers; 
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF1_REG, write_value);
+}
+
+void apds9960_set_gconf_2(struct apds9960_dev* apds9960, struct apds9960_gconf_2_cfg cfg)
+{
+  u8 write_value = cfg.ggain << 5 | cfg.gldrive << 3 | cfg.gwtime; 
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF2_REG, write_value);
+}
+
+void apds9960_set_gpulse(struct apds9960_dev* apds9960, struct apds9960_gpulse_cfg cfg)
+{
+  u8 write_value = cfg.gplen << 6 | cfg.gpulse;
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF2_REG, write_value);
 }
 
 static void apds9960_set_enable(struct apds9960_dev* apds9960, int value)
@@ -72,12 +110,16 @@ void apds9960_idle_assert_gesture(struct apds9960_dev* apds9960)
 {
   // GESTURE_RIGHT_OFFSET_REGISTER, w/ gpulse on bits 5:0
   // i2c_smbus_write_byte_data(apds9960->client, APDS9960_GOFFSET_R, 0x89); // 16 pulses, 32 us
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF1_REG, 1<<6); // interrupt after 4 gesture events
+  // Run forever!
+  apds9960_set_gconf_1(apds9960, (struct apds9960_gconf_1_cfg) {.gfifoth = 1, .gexmsk = 0xf, .gexpers = 3});
+  apds9960_set_gconf_2(apds9960, (struct apds9960_gconf_2_cfg) {.ggain = 1, .gldrive = 0, .gwtime = 0});
+  apds9960_set_gpulse(apds9960, (struct apds9960_gpulse_cfg)  {.gplen = 3, .gpulse = 16});
+
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GEXTH, 0); // Exit threshold, we run indefinitely
   apds9960_set_config_three(apds9960, APDS9960_CONFIG_PCMP_ENABLE);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE);
   // Power on and enable gesture mode (see datasheet registers) apds9960->state = APDS9960_STATE_MOTION;
   apds9960_set_enable(apds9960, APDS9960_ENABLE_ON | APDS9960_ENABLE_GESTURE);
-  // asserting gmode actually forces the apds9960 to ender the gesture engine
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE);
 }
 
 // Returns 0 on success, and sets the outparams to the color values
@@ -207,21 +249,28 @@ static void gesture_work_handler(struct work_struct *work)
   if (status & APDS9960_STATUS_GINT) {
     dev_info(&client->dev, "GINT");
     u8 gflvl = i2c_smbus_read_byte_data(client, APDS9960_FIFO_LEVEL);
+    dev_info(&client->dev, "gflvl: %d", gflvl);
+    u8 gstatus = i2c_smbus_read_byte_data(client, APDS9960_GSTATUS_REG);
+    if(gstatus & APDS9960_GSTATUS_GFOV)
+    {
+      dev_err(&client->dev, "Overflow event detected!!!");
+    }
     u8 ififo;
     for(ififo = 0; ififo < gflvl; ++ififo) {
       // Process gesture data from each FIFO queue
       for (i = 0; i < 4; i++) {
         gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
+        dev_info(&client->dev, "%x:%d", APDS9960_GFIFO_U_REG + i, gesture_data);
 
-        switch (gesture_data) {
-          default: // Up gesture
-            input_report_key(apds9960->input, KEY_DOWN, 1);
-            input_sync(apds9960->input);
-            input_report_key(apds9960->input, KEY_UP, 0);
-            input_sync(apds9960->input);
-            break;
-          // Add other gesture cases here
-        }
+        // switch (gesture_data) {
+        //   default: // Up gesture
+        //     input_report_key(apds9960->input, KEY_DOWN, 1);
+        //     input_sync(apds9960->input);
+        //     input_report_key(apds9960->input, KEY_UP, 0);
+        //     input_sync(apds9960->input);
+        //     break;
+        //   // Add other gesture cases here
+        // }
       }
     }
   } else if (status & APDS9960_STATUS_AVALID || status & APDS9960_STATUS_PVALID) {
@@ -237,11 +286,9 @@ static void gesture_work_handler(struct work_struct *work)
     }
     apds9960->data_ready = true;
     wake_up(&apds9960->wq);
+    apds9960_non_gest_clear(apds9960);
+    apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
   }
-
-  apds9960_non_gest_clear(apds9960);
-  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
-  enable_irq(apds9960->irq);
 }
 
 static irqreturn_t apds9960_isr(int irq, void *data)
@@ -249,7 +296,6 @@ static irqreturn_t apds9960_isr(int irq, void *data)
   struct apds9960_dev *apds9960 = data;
 
   // Schedule bottom half immediately
-  disable_irq_nosync(apds9960->irq);
   schedule_work(&apds9960->gesture_work);
 
   return IRQ_HANDLED;
