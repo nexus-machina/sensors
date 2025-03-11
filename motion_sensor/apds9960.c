@@ -257,26 +257,62 @@ static void gesture_work_handler(struct work_struct *work)
       dev_err(&client->dev, "Overflow event detected!!!");
     }
     while(gflvl) {
+      u8 udlr[4] = {0};  // Array to store Up, Down, Left, Right values
+      int max_idx = 0;    // Index of maximum value (0=Up, 1=Down, 2=Left, 3=Right)
+      u8 max_val = 0;    // Maximum value
+      int direction = -1; // Default: no gesture detected (-1)
+
       // Process gesture data from each FIFO queue
       for (i = 0; i < 4; i++) {
-        gesture_data = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
-        // TODO This right here needs to run a basic gesture detection algorithm by looking
-        // at the values reported by each channel (UDLR)
-        //
-        // Make sure it's simple, then report to linux input system
+        udlr[i] = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
 
-        // switch (gesture_data) {
-        //   default: // Up gesture
-        //     input_report_key(apds9960->input, KEY_DOWN, 1);
-        //     input_sync(apds9960->input);
-        //     input_report_key(apds9960->input, KEY_UP, 0);
-        //     input_sync(apds9960->input);
-        //     break;
-        //   // Add other gesture cases here
-        // }
+        // Track maximum value and its index
+        if (udlr[i] > max_val) {
+          max_val = udlr[i];
+          max_idx = i;
+        }
       }
-      gflvl = i2c_smbus_read_byte_data(client, APDS9960_FIFO_LEVEL);
+
+      // Apply threshold to determine if a real gesture is detected
+      // Adjust GESTURE_THRESHOLD based on testing
+#define GESTURE_THRESHOLD 30
+
+      if (max_val >= GESTURE_THRESHOLD) {
+        // Convert max_idx to direction (0=Up, 1=Down, 2=Left, 3=Right)
+        direction = max_idx;
+        dev_info(&client->dev, "Input!!!!");
+
+        // Report to Linux input system
+        switch (direction) {
+          case 0: // Up gesture
+            input_report_key(apds9960->input, KEY_UP, 1);
+            input_sync(apds9960->input);
+            input_report_key(apds9960->input, KEY_UP, 0);
+            input_sync(apds9960->input);
+            break;
+          case 1: // Down gesture
+            input_report_key(apds9960->input, KEY_DOWN, 1);
+            input_sync(apds9960->input);
+            input_report_key(apds9960->input, KEY_DOWN, 0);
+            input_sync(apds9960->input);
+            break;
+          case 2: // Left gesture
+            input_report_key(apds9960->input, KEY_LEFT, 1);
+            input_sync(apds9960->input);
+            input_report_key(apds9960->input, KEY_LEFT, 0);
+            input_sync(apds9960->input);
+            break;
+          case 3: // Right gesture
+            input_report_key(apds9960->input, KEY_RIGHT, 1);
+            input_sync(apds9960->input);
+            input_report_key(apds9960->input, KEY_RIGHT, 0);
+            input_sync(apds9960->input);
+            break;
+        }
+      }
     }
+
+    gflvl = i2c_smbus_read_byte_data(client, APDS9960_FIFO_LEVEL);
     // assert gmode -> continue gesture data collection
     i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE);
   } else if (status & APDS9960_STATUS_AVALID || status & APDS9960_STATUS_PVALID) {
@@ -314,8 +350,8 @@ static int apds9960_probe (struct i2c_client * client)
   struct apds9960_dev * apds9960;
   int err;
   if (!client->dev.of_node) {
-      dev_err(&client->dev, "No device tree node found\n");
-      return -ENODEV;
+    dev_err(&client->dev, "No device tree node found\n");
+    return -ENODEV;
   }
   dev_info(&client->dev, "Device tree node: %pOF\n", client->dev.of_node);
 
@@ -330,8 +366,8 @@ static int apds9960_probe (struct i2c_client * client)
   // Allocate input device
   apds9960->input = devm_input_allocate_device(&client->dev);
   if (!apds9960->input) {
-      dev_err(&client->dev, "Failed to allocate input device");
-      return -ENOMEM;
+    dev_err(&client->dev, "Failed to allocate input device");
+    return -ENOMEM;
   }
 
   // Set input device name/ID
@@ -350,8 +386,8 @@ static int apds9960_probe (struct i2c_client * client)
 
   err = input_register_device(apds9960->input);
   if (err) {
-      dev_err(&client->dev, "Failed to register input device");
-      return err;
+    dev_err(&client->dev, "Failed to register input device");
+    return err;
   }
 
   /* Wait mechanism */
@@ -414,12 +450,14 @@ void apds9960_remove(struct i2c_client * client)
   struct apds9960_dev * apds9960;
   /* Get device structure from bus device context */
   apds9960 = i2c_get_clientdata(client);
+  disable_irq(apds9960->irq);
   /* Go to sleep... */
   apds9960_set_enable(apds9960, 0);
   dev_info(&client->dev,
       "apds9960_remove is entered on %s\n", apds9960->name);
   /* Deregister misc device */
   misc_deregister(&apds9960->apds9960_miscdevice);
+  flush_work(&apds9960->gesture_work);
   devm_free_irq(&client->dev, apds9960->irq, apds9960);
   gpiod_put(apds9960->gpio);
   dev_info(&client->dev,

@@ -148,6 +148,7 @@ enum apds9960_state_t {
   APDS9960_STATE_PROX,
 };
 
+
 struct apds9960_dev {
   struct i2c_client* client;
   struct miscdevice apds9960_miscdevice;
