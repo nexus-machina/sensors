@@ -14,6 +14,7 @@
 #include <linux/module.h>
 #include <linux/i2c.h>
 #include <linux/sysfs.h>
+#include <linux/delay.h>
 /*#include <linux/miscdevice.h>
 #include <linux/i2c.h>
 #include <linux/fs.h>
@@ -53,14 +54,21 @@ struct seesaw_dev {
 static int seesaw_read(struct seesaw_dev *seesaw, int *val)
 {
 	struct i2c_client *client = seesaw->client;
-	u8 buf[4] = {0,0,0,0};
+	client->addr = 0x36;
+	u8 buf[2] = {0,0,};
 	int ret;
-
-	mutex_lock(&seesaw->lock);
 	
-	ret = i2c_master_recv(client, buf, 3);
+	mutex_lock(&seesaw->lock);
+	for (int i = 0; i < 100; i++){
+		msleep(100);
+		ret = i2c_smbus_read_word_data(client, SEESAW_ADC_READ);
+		/*ret = i2c_master_recv(client, buf, 1);*/
+		if (ret >= 0){
+			pr_info("i2c_master_recv success: %d\n", ret);
+		}
+	}
 	if (ret < 0){
-		pr_info("i2c_master_recv failed\n");
+		pr_info("i2c_master_recv failed: %d\n", ret);
 		return ret;
 	}
 
@@ -113,8 +121,9 @@ static const struct attribute_group seesaw_attribute_group = {
 static const struct iio_chan_spec seesaw_channel[] = {
 	{
 		/*.type = IIO_TEMP,*/
-		.type = IIO_CAPACITANCE,
-		.indexed = 0,
+		/*.type = IIO_CAPACITANCE,*/
+		.type = IIO_VOLTAGE,
+		.indexed = 1,
 		.channel = 0,
 		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) | \
 				BIT(IIO_CHAN_INFO_SCALE),
@@ -131,6 +140,7 @@ static int seesaw_probe(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev;
 	struct seesaw_dev *seesaw;
+	int ret;
 
 	pr_info("Execution starts here\n");
 	
@@ -148,6 +158,13 @@ static int seesaw_probe(struct i2c_client *client)
 
 	indio_dev->channels = seesaw_channel;
 	indio_dev->num_channels = ARRAY_SIZE(seesaw_channel);
+
+	/* Enable the ADC channel */
+	ret = i2c_smbus_write_byte_data(client, 0x00, 0x01);
+	msleep(100);
+	if (ret < 0){
+		pr_info("Failed to enable ADC channel %d\n", ret);
+	}
 
 	/* Register the device with the IIO core */
 	devm_iio_device_register(&client->dev,indio_dev);
