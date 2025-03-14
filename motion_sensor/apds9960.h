@@ -154,7 +154,7 @@ struct apds9960_dev {
   struct miscdevice apds9960_miscdevice;
   struct input_dev *input;
   struct gpio_desc *gpio;
-  // struct mutex lock;
+  struct mutex lock;
   enum apds9960_state_t state;
   int irq;
   wait_queue_head_t wq;
