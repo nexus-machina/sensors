@@ -161,7 +161,7 @@ int apds9960_read_proximity(struct apds9960_dev* apds9960)
     pr_info("Reading prox data\n");
     expval = i2c_smbus_read_byte_data(apds9960->client, PROX_DATA_REG);
     if (expval < 0) {
-        return -1;
+      return -1;
     }
   } else {
     return -1;
@@ -205,13 +205,13 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
 
   // Test if both failed
   if(!avalid && (proximity < 0)) {
-      pr_info("Data not ready!\n");
-      return -EFAULT;
+    pr_info("Data not ready!\n");
+    return -EFAULT;
   }
 
   // Prepare the output buffer
   size = sprintf(buf, "Prox: %02x, CRGB: C(%04x) R(%04x) G(%04x) B(%04x)",
-                 proximity, C, R, G, B);
+      proximity, C, R, G, B);
 
   /*
    * Replace NULL by \n. It is not needed to have a char array
@@ -312,21 +312,21 @@ static void gesture_work_handler(struct work_struct *work)
 
     // assert gmode -> continue gesture data collection
     i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE);
-    } else if (status & APDS9960_STATUS_AVALID || status & APDS9960_STATUS_PVALID) {
-      if (status & APDS9960_STATUS_AVALID)
-      {
-        dev_info(&client->dev, "AVALID");
-        apds9960->avalid = true;
-      }
-      if (status & APDS9960_STATUS_PVALID)
-      {
-        dev_info(&client->dev, "PVALID");
-        apds9960->pvalid = true;
-      }
-      apds9960->data_ready = true;
-      wake_up(&apds9960->wq);
-      apds9960_non_gest_clear(apds9960);
-      apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
+  } else if (status & APDS9960_STATUS_AVALID || status & APDS9960_STATUS_PVALID) {
+    if (status & APDS9960_STATUS_AVALID)
+    {
+      dev_info(&client->dev, "AVALID");
+      apds9960->avalid = true;
+    }
+    if (status & APDS9960_STATUS_PVALID)
+    {
+      dev_info(&client->dev, "PVALID");
+      apds9960->pvalid = true;
+    }
+    apds9960->data_ready = true;
+    wake_up(&apds9960->wq);
+    apds9960_non_gest_clear(apds9960);
+    apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
   }
   mutex_unlock(&apds9960->lock);
 }
@@ -455,30 +455,30 @@ static void apds9960_remove(struct i2c_client * client)
   apds9960 = i2c_get_clientdata(client);
 
   dev_info(&client->dev, "apds9960_remove is entered on %s\n", apds9960->name);
-  
+
   /* First, disable interrupts to prevent new work from being scheduled */
   disable_irq(apds9960->irq);
-  
+
   /* Cancel any pending work and wait for completion */
   cancel_work_sync(&apds9960->gesture_work);
-  
+
   /* Now it's safe to acquire the mutex since no new work can be scheduled */
   mutex_lock(&apds9960->lock);
-  
+
   /* Put device to sleep */
   i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, 0);
   apds9960_set_enable(apds9960, 0);
-  
+
   mutex_unlock(&apds9960->lock);
 
   /* Deregister misc device */
   misc_deregister(&apds9960->apds9960_miscdevice);
-  
+
   /* Free IRQ and GPIO */
   devm_free_irq(&client->dev, apds9960->irq, apds9960);
 
   gpiod_put(apds9960->gpio);
-  
+
   dev_info(&client->dev, "apds9960_remove is exited on %s\n", apds9960->name);
 }
 
