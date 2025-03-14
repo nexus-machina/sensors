@@ -113,7 +113,7 @@ void apds9960_assert_pon(struct apds9960_dev* apds9960)
   apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
 }
 
-void apds9960_idle_assert_gesture(struct apds9960_dev* apds9960)
+void apds9960_idle_assert_gesture(struct apds9960_dev* apds9960, u8 gpenth, u8 gexth)
 {
   // GESTURE_RIGHT_OFFSET_REGISTER, w/ gpulse on bits 5:0
   // i2c_smbus_write_byte_data(apds9960->client, APDS9960_GOFFSET_R, 0x89); // 16 pulses, 32 us
@@ -123,11 +123,17 @@ void apds9960_idle_assert_gesture(struct apds9960_dev* apds9960)
   apds9960_set_gpulse(apds9960, (struct apds9960_gpulse_cfg)  {.gplen = 3, .gpulse = 16});
   i2c_smbus_write_byte_data(apds9960->client, APDS9960_CONFIG_THREE, 1<<4); // set SAI
 
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GEXTH, 0); // Exit threshold, we run indefinitely
+  // set entry and exit thresholds
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GPENTH, gpenth);
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GEXTH, gexth);
+  apds9960->gpenth = gpenth;
+  apds9960->gexth = gexth;
   apds9960_set_config_three(apds9960, APDS9960_CONFIG_PCMP_ENABLE);
-  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE);
+
+  // set enable
+  i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN);
   // Power on and enable gesture mode (see datasheet registers) apds9960->state = APDS9960_STATE_MOTION;
-  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON | APDS9960_ENABLE_GESTURE);
+  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON | APDS9960_ENABLE_GESTURE | APDS9960_ENABLE_PROX);
 }
 
 // Returns 0 on success, and sets the outparams to the color values
@@ -264,6 +270,30 @@ static void gesture_work_handler(struct work_struct *work)
       for (i = 0; i < 4; i++) {
         udlr[i] = i2c_smbus_read_byte_data(client, APDS9960_GFIFO_U_REG + i);
 
+        // detect 'keyup' events
+        if(apds9960->udlr_kstate[i] && udlr[i] <= apds9960->gpenth)
+        {
+          apds9960->udlr_kstate[i] = false;
+          switch (i) {
+            case 0: // Up gesture
+              input_report_key(apds9960->input, KEY_UP, 0);
+              input_sync(apds9960->input);
+              break;
+            case 1: // Down gesture
+              input_report_key(apds9960->input, KEY_DOWN, 0);
+              input_sync(apds9960->input);
+              break;
+            case 2: // Left gesture
+              input_report_key(apds9960->input, KEY_LEFT, 0);
+              input_sync(apds9960->input);
+              break;
+            case 3: // Right gesture
+              input_report_key(apds9960->input, KEY_RIGHT, 0);
+              input_sync(apds9960->input);
+              break;
+          }
+        }
+
         // Track maximum value and its index
         if (udlr[i] > max_val) {
           max_val = udlr[i];
@@ -273,36 +303,28 @@ static void gesture_work_handler(struct work_struct *work)
 
       // Apply threshold to determine if a real gesture is detected
       // Adjust GESTURE_THRESHOLD based on testing
-#define GESTURE_THRESHOLD 30
 
-      if (max_val >= GESTURE_THRESHOLD) {
+      if (max_val >= apds9960->gpenth) {
         // Convert max_idx to direction (0=Up, 1=Down, 2=Left, 3=Right)
         direction = max_idx;
+        apds9960->udlr_kstate[direction] = true;
 
         // Report to Linux input system
         switch (direction) {
           case 0: // Up gesture
             input_report_key(apds9960->input, KEY_UP, 1);
             input_sync(apds9960->input);
-            input_report_key(apds9960->input, KEY_UP, 0);
-            input_sync(apds9960->input);
             break;
           case 1: // Down gesture
             input_report_key(apds9960->input, KEY_DOWN, 1);
-            input_sync(apds9960->input);
-            input_report_key(apds9960->input, KEY_DOWN, 0);
             input_sync(apds9960->input);
             break;
           case 2: // Left gesture
             input_report_key(apds9960->input, KEY_LEFT, 1);
             input_sync(apds9960->input);
-            input_report_key(apds9960->input, KEY_LEFT, 0);
-            input_sync(apds9960->input);
             break;
           case 3: // Right gesture
             input_report_key(apds9960->input, KEY_RIGHT, 1);
-            input_sync(apds9960->input);
-            input_report_key(apds9960->input, KEY_RIGHT, 0);
             input_sync(apds9960->input);
             break;
         }
@@ -440,7 +462,7 @@ static int apds9960_probe (struct i2c_client * client)
   apds9960_set_config_three(apds9960, APDS9960_CONFIG_PCMP_ENABLE);
 
   apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
-  apds9960_idle_assert_gesture(apds9960);
+  apds9960_idle_assert_gesture(apds9960, 30, 30);
 
   /* Register the misc device */
   dev_info(&client->dev, "apds9960 probe successful");

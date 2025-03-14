@@ -31,6 +31,7 @@
 #define APDS9960_PERS 0x8c
 #define APDS9960_CONFIG_THREE 0x9f
 #define APDS9960_FIFO_LEVEL 0xAE
+#define APDS9960_GPENTH 0xA1
 #define APDS9960_GEXTH 0xA1
 #define APDS9960_GPULSE_REG 0xA6
 
@@ -161,6 +162,9 @@ struct apds9960_dev {
   bool data_ready;
   bool avalid;
   bool pvalid;
+  u8 gpenth;
+  u8 gexth;
+  bool udlr_kstate[4];
   struct timer_list timer;
   char name[8]; /* apds9960 */
   struct work_struct gesture_work; // Add workqueue for bottom half
