@@ -209,12 +209,6 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
       return -EFAULT;
   }
 
-  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON | APDS9960_ENABLE_PROX | APDS9960_ENABLE_PROX_INT);
-  // Setup interrupt thresholds just for testing purposes
-  // apds9960_set_prox_pers(apds9960, 1);
-  // i2c_smbus_write_byte_data(apds9960->client, APDS9960_PILT, 0x10);
-  // i2c_smbus_write_byte_data(apds9960->client, APDS9960_PIHT, 0xa0);
-
   // Prepare the output buffer
   size = sprintf(buf, "Prox: %02x, CRGB: C(%04x) R(%04x) G(%04x) B(%04x)",
                  proximity, C, R, G, B);
