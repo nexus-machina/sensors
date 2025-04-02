@@ -377,6 +377,7 @@ static int apds9960_probe (struct i2c_client * client)
     return -ENODEV;
   }
   dev_info(&client->dev, "Device tree node: %pOF\n", client->dev.of_node);
+  dev_err(&client->dev, "NEW PATCH\n");
 
   /* Allocate the private structure */
   apds9960 = devm_kzalloc(&client->dev, sizeof(struct apds9960_dev), GFP_KERNEL);
