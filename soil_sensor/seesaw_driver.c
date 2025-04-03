@@ -54,14 +54,25 @@ struct seesaw_dev {
 static int seesaw_read(struct seesaw_dev *seesaw, int *val)
 {
 	struct i2c_client *client = seesaw->client;
-	client->addr = 0x36;
-	u8 buf[2] = {0,0,};
+	u8 buf[2];
+	buf[0] = (0x10 >> 8) & 0xFF; //high byte
+	buf[1] = 0x0F & 0xFF;
 	int ret;
+
 	
-	mutex_lock(&seesaw->lock);
-	for (int i = 0; i < 100; i++){
+	/*mutex_lock(&seesaw->lock);*/
+	ret = i2c_master_send(client, 0x0F, 1);
+	if (ret < 0)
+		pr_info("I2C write failed\n");
+	else
+		pr_info("I2C write successful\n");
+
+	msleep(20);
+	if (ret < 0)
+		pr_info("Failed to set base register: %d\n", ret);
+	for (int i = 0; i < 10; i++){
 		msleep(100);
-		ret = i2c_smbus_read_word_data(client, SEESAW_ADC_READ);
+		ret = i2c_smbus_read_word_data(client, 0x10);
 		/*ret = i2c_master_recv(client, buf, 1);*/
 		if (ret >= 0){
 			pr_info("i2c_master_recv success: %d\n", ret);
@@ -72,7 +83,7 @@ static int seesaw_read(struct seesaw_dev *seesaw, int *val)
 		return ret;
 	}
 
-	mutex_unlock(&seesaw->lock);
+	/*mutex_unlock(&seesaw->lock);*/
 
 	return ret;
 }
@@ -121,12 +132,11 @@ static const struct attribute_group seesaw_attribute_group = {
 static const struct iio_chan_spec seesaw_channel[] = {
 	{
 		/*.type = IIO_TEMP,*/
-		/*.type = IIO_CAPACITANCE,*/
-		.type = IIO_VOLTAGE,
+		.type = IIO_CAPACITANCE,
+		/*.type = IIO_VOLTAGE,*/
 		.indexed = 1,
 		.channel = 0,
-		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) | \
-				BIT(IIO_CHAN_INFO_SCALE),
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
 	},
 };
 
@@ -158,13 +168,6 @@ static int seesaw_probe(struct i2c_client *client)
 
 	indio_dev->channels = seesaw_channel;
 	indio_dev->num_channels = ARRAY_SIZE(seesaw_channel);
-
-	/* Enable the ADC channel */
-	ret = i2c_smbus_write_byte_data(client, 0x00, 0x01);
-	msleep(100);
-	if (ret < 0){
-		pr_info("Failed to enable ADC channel %d\n", ret);
-	}
 
 	/* Register the device with the IIO core */
 	devm_iio_device_register(&client->dev,indio_dev);
