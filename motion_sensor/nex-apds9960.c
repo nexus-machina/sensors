@@ -20,7 +20,7 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
   char buf[5];
   struct apds9960_dev * apds9960;
   apds9960 = container_of(file->private_data, struct apds9960_dev, apds9960_miscdevice);
-  mutex_lock(&apds9960->lock);
+  guard(mutex)(&apds9960->lock);
   copy_from_user(buf, userbuf, count);
   /* Convert char array to char string */
   buf[count-1] = '\0';
@@ -53,7 +53,6 @@ static ssize_t apds9960_write_file(struct file *file, const char __user *userbuf
   bool gien = gconf & APDS9960_GCONF4_GIEN;
   dev_info(&apds9960->client->dev, "GSTATUS { gien: %d, gmode: %d }", gien, gmode);
 
-  mutex_unlock(&apds9960->lock);
   return count;
 }
 
@@ -119,7 +118,7 @@ void apds9960_idle_assert_gesture(struct apds9960_dev* apds9960, u8 gpenth, u8 g
   // i2c_smbus_write_byte_data(apds9960->client, APDS9960_GOFFSET_R, 0x89); // 16 pulses, 32 us
   // Run forever!
   apds9960_set_gconf_1(apds9960, (struct apds9960_gconf_1_cfg) {.gfifoth = 1, .gexmsk = 0xf, .gexpers = 3});
-  apds9960_set_gconf_2(apds9960, (struct apds9960_gconf_2_cfg) {.ggain = 1, .gldrive = 0, .gwtime = 0});
+  apds9960_set_gconf_2(apds9960, (struct apds9960_gconf_2_cfg) {.ggain = 1, .gldrive = 2, .gwtime = 0});
   apds9960_set_gpulse(apds9960, (struct apds9960_gpulse_cfg)  {.gplen = 3, .gpulse = 16});
   i2c_smbus_write_byte_data(apds9960->client, APDS9960_CONFIG_THREE, 1<<4); // set SAI
 
@@ -187,14 +186,13 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   dev_info(&apds9960->client->dev, "Enter Read");
 
   apds9960_set_adc_time(apds9960, 0xff);
-  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 1, .pgain = 2, .again = 0});
+  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 3, .pgain = 2, .again = 0});
 
   apds9960_set_config_three(apds9960, APDS9960_CONFIG_PCMP_ENABLE);
-  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON | APDS9960_ENABLE_PROX | APDS9960_ENABLE_ALS);
+  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON | APDS9960_ENABLE_PROX);
 
   apds9960->data_ready = false;
   apds9960->pvalid = false;
-  apds9960->avalid = false;
 
   ret = wait_event_interruptible(apds9960->wq, &apds9960->data_ready);
   if(ret) {
@@ -205,19 +203,35 @@ static ssize_t apds9960_read_file(struct file *file, char __user *userbuf,
   if(proximity < 0) {
     pr_info("Prox not valid, skipping!!!!");
   }
-  dev_info(&apds9960->client->dev, "Prox read");
+
+  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON | APDS9960_ENABLE_ALS);
+
+  apds9960->data_ready = false;
+  apds9960->avalid = false;
+
+  ret = wait_event_interruptible(apds9960->wq, &apds9960->data_ready);
+  if(ret) {
+    return ret;
+  }
+
   avalid = apds9960_read_colors_crgb(apds9960, &C, &R, &G, &B);
-  dev_info(&apds9960->client->dev, "Color read");
 
   // Test if both failed
   if(!avalid && (proximity < 0)) {
-    pr_info("Data not ready!\n");
-    return -EFAULT;
+    pr_info("ALS not valid\n");
   }
 
   // Prepare the output buffer
   size = sprintf(buf, "Prox: %02x, CRGB: C(%04x) R(%04x) G(%04x) B(%04x)",
       proximity, C, R, G, B);
+
+  // Configure gain controls now so that the gesture engine can make use of them
+  apds9960_set_adc_time(apds9960, 0xff);
+  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 1, .pgain = 2, .again = 1});
+  apds9960_set_config_three(apds9960, APDS9960_CONFIG_PCMP_ENABLE);
+
+  apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
+  apds9960_idle_assert_gesture(apds9960, 30, 30);
 
   /*
    * Replace NULL by \n. It is not needed to have a char array
@@ -248,7 +262,7 @@ static void gesture_work_handler(struct work_struct *work)
   struct i2c_client *client = apds9960->client;
   u8 status, gesture_data;
   int i;
-  mutex_lock(&apds9960->lock);
+  guard(mutex)(&apds9960->lock);
 
   // Read status register
   status = i2c_smbus_read_byte_data(client, APDS9960_STATUS);
@@ -261,9 +275,11 @@ static void gesture_work_handler(struct work_struct *work)
       dev_err(&client->dev, "Overflow event detected!!!");
     }
     while(gflvl) {
-      u8 udlr[4] = {0};  // Array to store Up, Down, Left, Right values
+      int udlr[4] = {0};  // Array to store Up, Down, Left, Right values
       int max_idx = 0;    // Index of maximum value (0=Up, 1=Down, 2=Left, 3=Right)
+      int min_idx = 0;   // Minumum difference (indeterminate direction if too low)
       u8 max_val = 0;    // Maximum value
+      u8 min_val = 255;    // Maximum value
       int direction = -1; // Default: no gesture detected (-1)
 
       // Process gesture data from each FIFO queue
@@ -299,13 +315,15 @@ static void gesture_work_handler(struct work_struct *work)
           max_val = udlr[i];
           max_idx = i;
         }
+        if(udlr[i] < min_val) {
+          min_val = udlr[i];
+          min_idx = i;
+        }
       }
 
-      // Apply threshold to determine if a real gesture is detected
-      // Adjust GESTURE_THRESHOLD based on testing
-
-      if (max_val >= apds9960->gpenth) {
-        // Convert max_idx to direction (0=Up, 1=Down, 2=Left, 3=Right)
+      int variance = max_val - min_val;
+      // Keydown events
+      if (!apds9960->udlr_kstate[direction] && variance > max_val / 10 && max_val >= apds9960->gpenth) {
         direction = max_idx;
         apds9960->udlr_kstate[direction] = true;
 
@@ -334,7 +352,8 @@ static void gesture_work_handler(struct work_struct *work)
 
     // assert gmode -> continue gesture data collection
     i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, APDS9960_GCONF4_GIEN | APDS9960_GCONF4_GMODE);
-  } else if (status & APDS9960_STATUS_AVALID || status & APDS9960_STATUS_PVALID) {
+  }
+  if (status & APDS9960_STATUS_AVALID || status & APDS9960_STATUS_PVALID) {
     if (status & APDS9960_STATUS_AVALID)
     {
       dev_info(&client->dev, "AVALID");
@@ -350,7 +369,6 @@ static void gesture_work_handler(struct work_struct *work)
     apds9960_non_gest_clear(apds9960);
     apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
   }
-  mutex_unlock(&apds9960->lock);
 }
 
 static irqreturn_t apds9960_isr(int irq, void *data)
@@ -372,6 +390,7 @@ static int apds9960_probe (struct i2c_client * client)
   struct platform_device *pdev;
   struct apds9960_dev * apds9960;
   int err;
+  dev_info(&client->dev, "ENTER APDS PROBE\n", client->dev.of_node);
   if (!client->dev.of_node) {
     dev_err(&client->dev, "No device tree node found\n");
     return -ENODEV;
@@ -458,7 +477,7 @@ static int apds9960_probe (struct i2c_client * client)
 
   // Configure gain controls now so that the gesture engine can make use of them
   apds9960_set_adc_time(apds9960, 0xff);
-  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 1, .pgain = 2, .again = 1});
+  apds9960_set_control_1(apds9960, (struct apds9960_ctrl_1_cfg) {.ldrive = 3, .pgain = 2, .again = 1});
   apds9960_set_config_three(apds9960, APDS9960_CONFIG_PCMP_ENABLE);
 
   apds9960_set_enable(apds9960, APDS9960_ENABLE_ON);
@@ -481,17 +500,22 @@ static void apds9960_remove(struct i2c_client * client)
   /* First, disable interrupts to prevent new work from being scheduled */
   disable_irq(apds9960->irq);
 
+  dev_info(&client->dev, "IRQs disabled on %s\n", apds9960->name);
+
   /* Cancel any pending work and wait for completion */
-  cancel_work_sync(&apds9960->gesture_work);
+  // cancel_work_sync(&apds9960->gesture_work);
+
+  // dev_info(&client->dev, "Workqueues finished on %s\n", apds9960->name);
 
   /* Now it's safe to acquire the mutex since no new work can be scheduled */
-  mutex_lock(&apds9960->lock);
+  guard(mutex)(&apds9960->lock);
+  dev_info(&client->dev, "Enter critical section on %s\n", apds9960->name);
 
   /* Put device to sleep */
   i2c_smbus_write_byte_data(apds9960->client, APDS9960_GCONF4_REG, 0);
   apds9960_set_enable(apds9960, 0);
 
-  mutex_unlock(&apds9960->lock);
+  dev_info(&client->dev, "Disables set on %s\n", apds9960->name);
 
   /* Deregister misc device */
   misc_deregister(&apds9960->apds9960_miscdevice);
