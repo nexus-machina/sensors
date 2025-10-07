@@ -290,7 +290,7 @@ static void seesaw_remove(struct i2c_client *client)
 
 /* list of devices supported by the driver */
 static const struct of_device_id seesaw_dt_ids[] = {
-	{ .compatible = "arrow,stemma", },
+	{ .compatible = "seesaw,stemma", },
 	{}
 };
 MODULE_DEVICE_TABLE(of, seesaw_dt_ids);
